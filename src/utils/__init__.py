@@ -70,6 +70,30 @@ def setup_logging(
     return log_file
 
 
+def wait_with_countdown(seconds: int, message: str = "Rate limiting") -> None:
+    """
+    Wait for specified seconds while showing a countdown to the user.
+    
+    Args:
+        seconds: Number of seconds to wait
+        message: Context message to display
+    """
+    import sys
+    
+    if seconds <= 0:
+        return
+    
+    for remaining in range(seconds, 0, -1):
+        # Use \r to overwrite the same line
+        sys.stdout.write(f"\r⏳ {message} - waiting {remaining}s to avoid API rate limits...")
+        sys.stdout.flush()
+        time.sleep(1)
+    
+    # Clear the countdown line
+    sys.stdout.write("\r" + " " * 70 + "\r")
+    sys.stdout.flush()
+
+
 def clean_old_logs(log_dir: str, max_days: int = 30) -> None:
     """
     Remove log files older than max_days.

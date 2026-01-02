@@ -57,7 +57,12 @@ def cmd_leavers(args, config: Config):
     module = LeaversModule(config)
     results = module.run(dry_run=args.dry_run)
     
-    return 0 if results['errors'] == 0 else 1
+    # errors can be a list or int depending on module
+    errors = results.get('errors', 0)
+    error_count = len(errors) if isinstance(errors, list) else errors
+    
+    # Return both exit code and results for summary
+    return (0 if error_count == 0 else 1, results)
 
 
 def cmd_snipe_to_jamf(args, config: Config):
@@ -68,7 +73,12 @@ def cmd_snipe_to_jamf(args, config: Config):
     module = SnipeToJamfModule(config)
     results = module.run(dry_run=args.dry_run)
     
-    return 0 if results['errors'] == 0 else 1
+    # errors can be a list or int depending on module
+    errors = results.get('errors', 0)
+    error_count = len(errors) if isinstance(errors, list) else errors
+    
+    # Return both exit code and results for summary
+    return (0 if error_count == 0 else 1, results)
 
 
 def cmd_user_match(args, config: Config):
@@ -79,7 +89,12 @@ def cmd_user_match(args, config: Config):
     module = UserMatchModule(config)
     results = module.run(dry_run=args.dry_run)
     
-    return 0 if results['errors'] == 0 else 1
+    # errors can be a list or int depending on module
+    errors = results.get('errors', 0)
+    error_count = len(errors) if isinstance(errors, list) else errors
+    
+    # Return both exit code and results for summary
+    return (0 if error_count == 0 else 1, results)
 
 
 def cmd_model_sync(args, config: Config):
@@ -89,7 +104,7 @@ def cmd_model_sync(args, config: Config):
     
     module = ModelSyncModule(config)
     
-    if args.check_only:
+    if getattr(args, 'check_only', False):
         results = module.check_models()
         print(f"\n📊 Model Check Results:")
         print(f"   Total models in Jamf: {results['total_jamf_models']}")
@@ -98,11 +113,12 @@ def cmd_model_sync(args, config: Config):
             print("   Missing models:")
             for model in results['missing_models']:
                 print(f"     - {model}")
-        return 0
+        return (0, results)
     
     results = module.run(dry_run=args.dry_run)
     
-    return 0 if results['errors'] == 0 else 1
+    # Return both exit code and results for summary
+    return (0 if results['errors'] == 0 else 1, results)
 
 
 def cmd_wakeup(args, config: Config):
@@ -148,6 +164,8 @@ def cmd_reconcile(args, config: Config):
 
 def cmd_run_all(args, config: Config):
     """Run all modules in sequence (except WakeUp which requires parameters)."""
+    import os
+    
     print("\n🔄 Running All Modules in Sequence...")
     print("   (WakeUp module skipped - requires explicit parameters)\n")
     
@@ -158,25 +176,150 @@ def cmd_run_all(args, config: Config):
         ("Model Sync", lambda: cmd_model_sync(args, config)),
     ]
     
-    results = {}
+    run_results = {}
+    module_data = {}
+    
     for name, runner in modules:
         print(f"\n{'='*60}")
         print(f"  Starting: {name}")
         print(f"{'='*60}")
         try:
-            results[name] = runner()
+            result = runner()
+            # Handle both tuple (code, data) and plain code returns
+            if isinstance(result, tuple):
+                code, data = result
+            else:
+                code, data = result, {}
+            run_results[name] = code
+            module_data[name] = data
         except Exception as e:
             print(f"❌ Error in {name}: {e}")
-            results[name] = 1
+            run_results[name] = 1
+            module_data[name] = {"exception": str(e)}
     
+    # Print console summary
     print(f"\n{'='*60}")
     print("  Summary of All Modules")
     print(f"{'='*60}")
-    for name, code in results.items():
+    for name, code in run_results.items():
         status = "✅ Success" if code == 0 else "❌ Failed"
         print(f"  {name}: {status}")
     
-    return 0 if all(c == 0 for c in results.values()) else 1
+    # Write summary file to output directory
+    summary_path = os.path.join(getattr(args, 'output_dir', './output'), 'run_summary.txt')
+    os.makedirs(os.path.dirname(summary_path), exist_ok=True)
+    
+    _write_run_summary(summary_path, args, run_results, module_data)
+    print(f"\n📝 Detailed summary written to: {summary_path}")
+    
+    return 0 if all(c == 0 for c in run_results.values()) else 1
+
+
+def _write_run_summary(filepath: str, args, results: dict, module_data: dict):
+    """Write a detailed run summary to file."""
+    with open(filepath, 'w') as f:
+        f.write("=" * 70 + "\n")
+        f.write("         JAMF-SNIPEIT SUITE - RUN SUMMARY REPORT\n")
+        f.write("=" * 70 + "\n\n")
+        f.write(f"Run Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Dry Run: {'Yes' if getattr(args, 'dry_run', False) else 'No'}\n")
+        f.write("\n" + "-" * 70 + "\n")
+        f.write("OVERALL STATUS\n")
+        f.write("-" * 70 + "\n\n")
+        
+        all_success = all(c == 0 for c in results.values())
+        f.write(f"Overall Result: {'SUCCESS' if all_success else 'FAILED'}\n\n")
+        
+        for name, code in results.items():
+            status = "✅ SUCCESS" if code == 0 else "❌ FAILED"
+            f.write(f"  {name}: {status}\n")
+        
+        f.write("\n" + "=" * 70 + "\n")
+        f.write("DETAILED MODULE RESULTS\n")
+        f.write("=" * 70 + "\n")
+        
+        # Leavers Module
+        if "Leavers" in module_data:
+            f.write("\n" + "-" * 70 + "\n")
+            f.write("LEAVERS MODULE\n")
+            f.write("-" * 70 + "\n")
+            data = module_data["Leavers"]
+            if isinstance(data, dict):
+                if "exception" in data:
+                    f.write(f"  CRASHED: {data['exception']}\n")
+                else:
+                    f.write(f"  Total users processed:    {data.get('total_users', 0)}\n")
+                    f.write(f"  Users with assets:        {data.get('matched_users', 0)}\n")
+                    f.write(f"  Assets marked pending:    {data.get('updated_assets', 0)}\n")
+                    f.write(f"  User names updated:       {data.get('updated_user_names', 0)}\n")
+                    errors = data.get('errors', [])
+                    error_count = len(errors) if isinstance(errors, list) else errors
+                    f.write(f"  Errors:                   {error_count}\n")
+                    if isinstance(errors, list) and errors:
+                        f.write("\n  Error Details:\n")
+                        for err in errors[:10]:  # Limit to first 10
+                            f.write(f"    - {err}\n")
+                        if len(errors) > 10:
+                            f.write(f"    ... and {len(errors) - 10} more errors\n")
+        
+        # Snipe-to-Jamf Module
+        if "Snipe-to-Jamf" in module_data:
+            f.write("\n" + "-" * 70 + "\n")
+            f.write("SNIPE-TO-JAMF MODULE\n")
+            f.write("-" * 70 + "\n")
+            data = module_data["Snipe-to-Jamf"]
+            if isinstance(data, dict):
+                if "exception" in data:
+                    f.write(f"  CRASHED: {data['exception']}\n")
+                else:
+                    f.write(f"  Total processed:  {data.get('total_processed', 0)}\n")
+                    f.write(f"  Updated:          {data.get('updated', 0)}\n")
+                    f.write(f"  Skipped:          {data.get('skipped', 0)}\n")
+                    f.write(f"  Errors:           {data.get('errors', 0)}\n")
+                    details = data.get('details', [])
+                    if details:
+                        f.write("\n  Error Details:\n")
+                        for d in details[:10]:
+                            f.write(f"    - {d.get('serial', 'N/A')}: {d.get('error', 'Unknown')}\n")
+                        if len(details) > 10:
+                            f.write(f"    ... and {len(details) - 10} more\n")
+        
+        # User Match Module
+        if "User Match" in module_data:
+            f.write("\n" + "-" * 70 + "\n")
+            f.write("USER MATCH MODULE\n")
+            f.write("-" * 70 + "\n")
+            data = module_data["User Match"]
+            if isinstance(data, dict):
+                if "exception" in data:
+                    f.write(f"  CRASHED: {data['exception']}\n")
+                else:
+                    f.write(f"  Total devices:    {data.get('total_devices', 0)}\n")
+                    f.write(f"  Assets created:   {data.get('assets_created', 0)}\n")
+                    f.write(f"  Assets updated:   {data.get('assets_updated', 0)}\n")
+                    f.write(f"  Checkouts:        {data.get('checkouts', 0)}\n")
+                    f.write(f"  Reassignments:    {data.get('reassignments', 0)}\n")
+                    f.write(f"  Skipped:          {data.get('skipped', 0)}\n")
+                    f.write(f"  Errors:           {data.get('errors', 0)}\n")
+        
+        # Model Sync Module
+        if "Model Sync" in module_data:
+            f.write("\n" + "-" * 70 + "\n")
+            f.write("MODEL SYNC MODULE\n")
+            f.write("-" * 70 + "\n")
+            data = module_data["Model Sync"]
+            if isinstance(data, dict):
+                if "exception" in data:
+                    f.write(f"  CRASHED: {data['exception']}\n")
+                else:
+                    f.write(f"  Total processed:  {data.get('total_processed', 0)}\n")
+                    f.write(f"  Updated:          {data.get('updated', 0)}\n")
+                    f.write(f"  Skipped:          {data.get('skipped', 0)}\n")
+                    f.write(f"  Errors:           {data.get('errors', 0)}\n")
+        
+        f.write("\n" + "=" * 70 + "\n")
+        f.write("END OF REPORT\n")
+        f.write("=" * 70 + "\n")
 
 
 def interactive_menu(config: Config):

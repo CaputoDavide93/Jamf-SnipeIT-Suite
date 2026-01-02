@@ -135,9 +135,15 @@ class LeaversModule:
                     logger.error(f"Error processing user {user.get('displayName')}: {e}")
                     results["errors"].append(str(e))
             
-            # Small delay between batches
+            # Small delay between batches with countdown
             if batch_start + BATCH_SIZE < len(users):
-                time.sleep(2)
+                try:
+                    from utils import wait_with_countdown
+                except ImportError:
+                    from src.utils import wait_with_countdown
+                current_batch = batch_start // BATCH_SIZE + 1
+                total_batches = (len(users) + BATCH_SIZE - 1) // BATCH_SIZE
+                wait_with_countdown(2, f"Leavers batch {current_batch}/{total_batches}")
         
         return results
     

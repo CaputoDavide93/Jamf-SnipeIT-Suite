@@ -110,9 +110,16 @@ class SnipeToJamfModule:
                 results["errors"] += 1
                 results["details"].append({"serial": serial, "error": str(e)})
             
-            # Rate limiting delay
+            # Rate limiting delay with visual feedback for longer delays
             if self.update_delay > 0:
-                time.sleep(self.update_delay)
+                if self.update_delay >= 2:
+                    try:
+                        from utils import wait_with_countdown
+                    except ImportError:
+                        from src.utils import wait_with_countdown
+                    wait_with_countdown(self.update_delay, f"Processed {i}/{len(computers)}")
+                else:
+                    time.sleep(self.update_delay)
         
         # Print summary
         self._print_summary(results, dry_run)

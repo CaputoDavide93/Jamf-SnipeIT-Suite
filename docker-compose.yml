@@ -42,6 +42,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: jamf-snipeit-suite:latest
+    container_name: jamf-snipeit-cli
     volumes:
       - ./config:/app/config:ro
       - ./logs:/app/logs

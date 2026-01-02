@@ -182,10 +182,16 @@ class UserMatchModule:
                         notes=str(e),
                     )
                 
-                # Batch delay
+                # Batch delay with countdown
                 if i % self.batch_size == 0 and i < len(computers):
-                    logger.info(f"Batch complete. Waiting {self.batch_delay}s...")
-                    time.sleep(self.batch_delay)
+                    try:
+                        from utils import wait_with_countdown
+                    except ImportError:
+                        from src.utils import wait_with_countdown
+                    batch_num = i // self.batch_size
+                    total_batches = (len(computers) + self.batch_size - 1) // self.batch_size
+                    logger.info(f"Batch {batch_num}/{total_batches} complete ({i}/{len(computers)} devices)")
+                    wait_with_countdown(self.batch_delay, f"Batch {batch_num}/{total_batches} complete")
         
         finally:
             audit.close()
