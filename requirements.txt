@@ -1,0 +1,24 @@
+# Jamf-SnipeIT Suite Dependencies
+# Core dependencies
+requests>=2.28.0
+PyYAML>=6.0
+python-dateutil>=2.8.0
+
+# Azure AD / Microsoft Graph
+msal>=1.20.0
+
+# Async / Parallel Processing
+aiohttp>=3.8.0
+
+# Scheduling (optional - for automated execution)
+APScheduler>=3.10.0
+
+# Logging and utilities
+python-json-logger>=2.0.0
+
+# Development dependencies (optional)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=23.0.0
+# flake8>=6.0.0
+# mypy>=1.0.0

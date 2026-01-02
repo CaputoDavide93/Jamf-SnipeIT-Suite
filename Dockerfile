@@ -1,0 +1,71 @@
+# Jamf-SnipeIT Suite
+# Multi-stage build for optimized image size
+# Supports both AMD64 (Intel) and ARM64 (Apple Silicon M1/M2/M3)
+
+# Stage 1: Builder
+FROM --platform=$BUILDPLATFORM python:3.11-slim AS builder
+
+# Build arguments for multi-arch support
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+
+# Stage 2: Runtime
+FROM python:3.11-slim
+
+LABEL maintainer="IT Team"
+LABEL description="Jamf-SnipeIT Suite - Unified Asset Management Tool"
+LABEL version="1.0.0"
+
+# Create non-root user for security
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy application code
+COPY src/ ./src/
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /app/
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Create directories for config and logs
+RUN mkdir -p /app/config /app/logs /app/output && \
+    chown -R appuser:appgroup /app
+
+# Set Python path
+ENV PYTHONPATH="/app/src"
+ENV PYTHONUNBUFFERED=1
+
+# Default run mode (scheduler with startup run)
+ENV RUN_MODE=scheduler
+
+# Switch to non-root user
+USER appuser
+
+# Default command: run scheduler with startup execution
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+# Health check - verify Python can import core modules and config exists
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "from core.config import get_config; import os; assert os.path.exists('/app/config/config.yaml'), 'Config missing'" || exit 1

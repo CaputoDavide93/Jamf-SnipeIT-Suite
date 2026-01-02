@@ -1,0 +1,77 @@
+# Jamf-SnipeIT Suite - Docker Compose Configuration
+# 
+# Default mode: Scheduler with startup run + "NOW" command support
+# Usage:
+#   docker compose up -d                    # Start scheduler (default)
+#   docker compose run --rm cli leavers    # Run specific module
+#   docker compose attach jamf-snipeit     # Attach to scheduler for NOW command
+#
+
+services:
+  # Main service - Scheduler with startup run and NOW command
+  jamf-snipeit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Multi-architecture support (Intel + Apple Silicon)
+      platforms:
+        - "linux/amd64"
+        - "linux/arm64"
+    image: jamf-snipeit-suite:latest
+    container_name: jamf-snipeit
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+      - ./output:/app/output
+    environment:
+      - TZ=Europe/London
+      - RUN_MODE=scheduler
+    restart: unless-stopped
+    # Enable stdin for NOW command support
+    stdin_open: true
+    tty: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # CLI service for on-demand module execution
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jamf-snipeit-suite:latest
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+      - ./output:/app/output
+    environment:
+      - TZ=Europe/London
+      - RUN_MODE=cli
+    profiles:
+      - cli
+    # Usage: docker compose run --rm cli leavers --dry-run
+
+  # One-shot runner - runs all modules once and exits
+  run-once:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jamf-snipeit-suite:latest
+    container_name: jamf-snipeit-run-once
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+      - ./output:/app/output
+    environment:
+      - TZ=Europe/London
+      - RUN_MODE=run-once
+    profiles:
+      - run-once
+    # Usage: docker compose --profile run-once run --rm run-once
+
+# Named volumes for persistent data
+volumes:
+  logs:
+  output:

@@ -1,0 +1,144 @@
+# =============================================================================
+# Jamf-SnipeIT Suite - Unified Configuration
+# =============================================================================
+# Copy this file to config.yaml and fill in your credentials.
+# NEVER commit config.yaml to version control!
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Jamf Pro Configuration
+# -----------------------------------------------------------------------------
+jamf:
+  base_url: "https://your-company.jamfcloud.com"
+  # Authentication: username/password OR client_id/client_secret
+  username: "your_jamf_username"
+  password: "your_jamf_password"
+  # OAuth2 client credentials (alternative to username/password)
+  client_id: ""
+  client_secret: ""
+  # Extension Attribute for storing Snipe-IT Asset ID
+  ea_snipe_asset_id: "SnipeIT_Asset_ID"
+  # Smart group for user matching (Jamf_User_Match module)
+  smart_group: "All Managed Clients"
+
+# -----------------------------------------------------------------------------
+# Snipe-IT Configuration
+# -----------------------------------------------------------------------------
+snipeit:
+  base_url: "https://your-snipeit-instance.com"
+  api_token: "your_snipeit_api_token"
+  # Status IDs (get these from your Snipe-IT admin)
+  status_deployed_id: 1
+  status_pending_id: 8
+  status_checkedout_id: 2
+  # Default fallback IDs
+  model_fallback_id: 40
+  company_id: 1
+  location_id: 0
+  category_id: 0
+
+# -----------------------------------------------------------------------------
+# Azure AD / Microsoft Graph Configuration
+# (Used by Leavers module)
+# -----------------------------------------------------------------------------
+azure:
+  tenant_id: "your-tenant-id"
+  client_id: "your-client-id"
+  client_secret: "your-client-secret"
+  scope: "https://graph.microsoft.com/.default"
+  # Azure AD groups for leavers processing
+  leavers_group_id: "azure-group-id-for-leavers"
+  disabled_group_id: "azure-group-id-for-disabled-users"
+
+# -----------------------------------------------------------------------------
+# User Matching Configuration
+# (Used by Jamf_User_Match module)
+# -----------------------------------------------------------------------------
+matching:
+  email_domain: "yourcompany.com"
+  min_score: 14
+  weight_lcs: 1.0
+  weight_char_overlap: 0.3
+  weight_bigram_dice: 2.0
+  use_bigram_dice: true
+  allow_reassignment: true
+
+# -----------------------------------------------------------------------------
+# Module-Specific Settings
+# -----------------------------------------------------------------------------
+modules:
+  # Leavers module settings
+  leavers:
+    enabled: true
+    auto_mode: false  # If true, runs automatically on schedule
+    interval_days: 7
+    lookback_days: 15
+
+  # User Match module settings
+  user_match:
+    enabled: true
+    dry_run: false
+    batch_size: 100
+    batch_delay_seconds: 30
+
+  # Model Sync module settings
+  model_sync:
+    enabled: true
+    dry_run: false
+    update_delay_seconds: 0.2
+    auto_create_models: true
+    auto_create_manufacturers: true
+    default_category_id: 1  # Category for new models
+
+  # Snipe to Jamf sync settings
+  snipe_to_jamf:
+    enabled: true
+    dry_run: false
+    update_delay_seconds: 0.2
+
+  # Wake-Up module settings
+  wakeup:
+    enabled: true
+    default_group_id: ""
+
+# -----------------------------------------------------------------------------
+# Scheduler Configuration
+# -----------------------------------------------------------------------------
+scheduler:
+  enabled: false  # Set to true to enable scheduled execution
+  timezone: "Europe/London"
+  jobs:
+    # Example: Run leavers check every Monday at 9am
+    leavers:
+      cron: "0 9 * * 1"  # Monday 9:00 AM
+      enabled: false
+    # Example: Run user match every Tuesday at 9am
+    user_match:
+      cron: "0 9 * * 2"  # Tuesday 9:00 AM
+      enabled: false
+    # Example: Run model sync weekly on Sunday
+    model_sync:
+      cron: "0 2 * * 0"  # Sunday 2:00 AM
+      enabled: false
+    # Example: Run Snipe→Jamf sync daily
+    snipe_to_jamf:
+      cron: "0 6 * * *"  # Daily 6:00 AM
+      enabled: false
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  dir: "./logs"
+  audit_csv: true
+  max_log_files: 30  # Days to keep logs
+
+# -----------------------------------------------------------------------------
+# API Settings
+# -----------------------------------------------------------------------------
+api:
+  timeout_seconds: 30
+  max_retries: 3
+  retry_delay_seconds: 2
+  rate_limit_wait_seconds: 60

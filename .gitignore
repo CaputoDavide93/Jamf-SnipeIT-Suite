@@ -1,0 +1,86 @@
+# =============================================================================
+# Jamf-SnipeIT Suite - Git Ignore
+# =============================================================================
+
+# ⚠️ SECURITY: Configuration files with secrets - NEVER commit these!
+config/config.yaml
+config.yaml
+*.secrets
+*.env
+.env
+.env.*
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Configuration with secrets (KEEP config.yaml.example)
+config/config.yaml
+config/model_map.json
+
+# Logs and output - these can be large and contain sensitive info
+logs/
+output/
+*.log
+*.csv
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker
+.docker/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+htmlcov/
+.tox/
+.nox/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
