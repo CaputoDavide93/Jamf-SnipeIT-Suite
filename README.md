@@ -237,18 +237,21 @@ modules:
 # Scheduler Configuration (for automated runs)
 scheduler:
   jobs:
-    leavers:
+    azure_starters:
       enabled: true
-      cron: "0 6 * * *"                  # Daily at 6 AM
-    snipe_to_jamf:
-      enabled: true
-      cron: "0 7 * * *"                  # Daily at 7 AM
-    user_match:
-      enabled: true
-      cron: "0 8 * * *"                  # Daily at 8 AM
+      cron: "0 6 * * 1"                  # Monday 6am - new hires start Mondays
     model_sync:
       enabled: true
-      cron: "0 0 * * 0"                  # Weekly on Sunday at midnight
+      cron: "0 1 * * 0"                  # Sunday 1am - prep models for the week
+    user_match:
+      enabled: true
+      cron: "30 6 * * *"                 # Daily 6:30am - device provisioning
+    snipe_to_jamf:
+      enabled: true
+      cron: "0 7 * * *"                  # Daily 7am - sync user details to Jamf
+    leavers:
+      enabled: true
+      cron: "30 7 * * *"                 # Daily 7:30am - process departures
 
 # Logging
 logging:
