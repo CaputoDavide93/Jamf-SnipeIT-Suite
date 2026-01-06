@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core import Config, JamfClient, SnipeITClient
-from utils import AuditCSV, UserMatcher, pick_primary_local_identity
+from utils import AuditCSV, UserMatcher, pick_primary_local_identity, rate_limit_delay
 
 logger = logging.getLogger(__name__)
 
@@ -182,16 +182,12 @@ class UserMatchModule:
                         notes=str(e),
                     )
                 
-                # Batch delay with countdown
+                # Batch delay
                 if i % self.batch_size == 0 and i < len(computers):
-                    try:
-                        from utils import wait_with_countdown
-                    except ImportError:
-                        from src.utils import wait_with_countdown
                     batch_num = i // self.batch_size
                     total_batches = (len(computers) + self.batch_size - 1) // self.batch_size
                     logger.info(f"Batch {batch_num}/{total_batches} complete ({i}/{len(computers)} devices)")
-                    wait_with_countdown(self.batch_delay, f"Batch {batch_num}/{total_batches} complete")
+                    rate_limit_delay(self.batch_delay, "User Match", batch_num, total_batches)
         
         finally:
             audit.close()

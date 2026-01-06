@@ -18,7 +18,8 @@ from modules import (
     UserMatchModule, 
     ModelSyncModule, 
     WakeUpModule,
-    ReconciliationModule
+    ReconciliationModule,
+    AzureStartersModule
 )
 
 
@@ -160,6 +161,22 @@ def cmd_reconcile(args, config: Config):
     issues = (len(results.jamf_only) + len(results.snipe_only) + 
               len(results.jamf_duplicates) + len(results.snipe_duplicates))
     return 0 if issues == 0 else 1
+
+
+def cmd_azure_starters(args, config: Config):
+    """Run Azure Starters module - sync Azure AD starters to Snipe-IT users."""
+    print("\n👥 Running Azure Starters Module...")
+    print("   Syncing Azure AD starters group members to Snipe-IT users.\n")
+    
+    module = AzureStartersModule(config)
+    results = module.run(dry_run=args.dry_run)
+    
+    # errors can be a list or int depending on module
+    errors = results.get('errors', [])
+    error_count = len(errors) if isinstance(errors, list) else errors
+    
+    # Return both exit code and results for summary
+    return (0 if error_count == 0 else 1, results)
 
 
 def cmd_run_all(args, config: Config):
@@ -494,6 +511,12 @@ Examples:
     reconcile_parser.add_argument('--output-dir', '-o', default='./output',
         help='Output directory for CSV exports (default: ./output)')
     
+    # Azure Starters command
+    starters_parser = subparsers.add_parser('azure-starters',
+        help='Sync Azure AD starters group members to Snipe-IT users')
+    starters_parser.add_argument('--dry-run', '-n', action='store_true',
+        help='Simulate actions without making changes')
+    
     # Health server command
     health_parser = subparsers.add_parser('health-server',
         help='Start health check HTTP server')
@@ -543,6 +566,7 @@ Examples:
         'wakeup': cmd_wakeup,
         'all': cmd_run_all,
         'reconcile': cmd_reconcile,
+        'azure-starters': cmd_azure_starters,
     }
     
     # Special handling for health server (long-running)

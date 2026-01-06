@@ -8,6 +8,7 @@ import time
 from typing import Any, Dict, List, Optional, Set
 
 from core import Config, JamfClient, SnipeITClient
+from utils import rate_limit_delay
 
 logger = logging.getLogger(__name__)
 
@@ -326,16 +327,9 @@ class ModelSyncModule:
                 logger.error(f"Error processing {serial}: {e}")
                 results["errors"] += 1
             
-            # Rate limiting with visual feedback for longer delays
+            # Rate limiting
             if self.update_delay > 0:
-                if self.update_delay >= 2:
-                    try:
-                        from utils import wait_with_countdown
-                    except ImportError:
-                        from src.utils import wait_with_countdown
-                    wait_with_countdown(self.update_delay, f"Processed {i}/{len(computers)}")
-                else:
-                    time.sleep(self.update_delay)
+                rate_limit_delay(self.update_delay, "Model Sync", i, len(computers))
         
         # Print summary
         self._print_summary(results, dry_run)

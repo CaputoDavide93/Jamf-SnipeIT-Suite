@@ -25,6 +25,7 @@ A comprehensive tool for managing asset synchronization between **Jamf Pro**, **
   - [Docker Usage](#docker-usage)
 - [Modules](#modules)
   - [Leavers Module](#leavers-module)
+  - [Azure Starters Module](#azure-starters-module)
   - [Snipe-to-Jamf Module](#snipe-to-jamf-module)
   - [User Match Module](#user-match-module)
   - [Model Sync Module](#model-sync-module)
@@ -63,6 +64,7 @@ The Jamf-SnipeIT Suite consolidates multiple asset management workflows into a s
 | Module | Description | Use Case |
 |--------|-------------|----------|
 | **Leavers** | Marks Snipe-IT assets as pending when users are disabled in Azure AD | Employee offboarding |
+| **Azure Starters** | Creates Snipe-IT users from Azure AD starters group | Employee onboarding |
 | **Snipe-to-Jamf** | Syncs user information from Snipe-IT assets to Jamf Pro computer records | Keep Jamf user data accurate |
 | **User Match** | Matches Jamf computers to Snipe-IT users using fuzzy matching | New device provisioning |
 | **Model Sync** | Synchronizes hardware models between Jamf Pro and Snipe-IT | Ensure models exist before asset creation |
@@ -87,11 +89,11 @@ The Jamf-SnipeIT Suite consolidates multiple asset management workflows into a s
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                      MODULES                              │  │
 │  │  ┌─────────┐ ┌───────────┐ ┌──────────┐ ┌───────────┐     │  │
-│  │  │ Leavers │ │SnipeToJamf│ │UserMatch │ │ ModelSync │     │  │
+│  │  │ Leavers │ │ AzStarter │ │SnipeJamf │ │ UserMatch │     │  │
 │  │  └────┬────┘ └─────┬─────┘ └────┬─────┘ └─────┬─────┘     │  │
-│  │  ┌────┴────┐ ┌─────┴─────┐                                │  │
-│  │  │ WakeUp  │ │Reconcile  │                                │  │
-│  │  └────┬────┘ └─────┬─────┘                                │  │
+│  │  ┌────┴────┐ ┌─────┴─────┐ ┌────┴─────┐                   │  │
+│  │  │ModelSync│ │  WakeUp   │ │Reconcile │                   │  │
+│  │  └────┬────┘ └─────┬─────┘ └────┬─────┘                   │  │
 │  └───────┼────────────┼──────────────────────────────────────┘  │
 │          │            │                                         │
 │          ▼            ▼                                         │
@@ -218,12 +220,19 @@ azure:
   
   # Azure AD groups to monitor
   leavers_group_id: "group-guid-for-leavers"
+  starters_group_id: "group-guid-for-starters"
 
 # Module-specific settings
 user_match:
   smart_group_id: 123                    # Jamf Smart Group to process
   allow_reassignment: false              # Allow reassigning assets to different users
   fuzzy_match_threshold: 80              # Minimum match score (0-100)
+
+# Azure Starters module settings
+modules:
+  azure_starters:
+    update_job_titles: true              # Update job titles for existing users
+    default_password: "YourSecurePassword123!"  # Password for new users (10+ chars)
 
 # Scheduler Configuration (for automated runs)
 scheduler:
@@ -424,6 +433,52 @@ azure:
 
 snipeit:
   status_pending_id: 3                  # Snipe-IT status ID for "Pending"
+```
+
+---
+
+### Azure Starters Module
+
+**Purpose**: Automatically create Snipe-IT users for new employees added to an Azure AD starters group. This ensures new starters have user records ready in Snipe-IT before they receive their equipment.
+
+**Workflow**:
+1. Query Azure AD for members of the configured starters group
+2. For each Azure AD user, check if they already exist in Snipe-IT (by email)
+3. If user doesn't exist, create a new Snipe-IT user with:
+   - First name and last name from Azure AD
+   - Email address
+   - Username (derived from email)
+   - Job title (from Azure AD)
+   - Default password (configurable)
+4. If user exists but job title differs, optionally update the job title
+
+**Usage**:
+```bash
+python src/main.py azure-starters --dry-run    # Preview changes
+python src/main.py azure-starters              # Execute changes
+```
+
+**Configuration**:
+```yaml
+azure:
+  starters_group_id: "your-starters-group-guid"   # Azure AD group for new starters
+
+modules:
+  azure_starters:
+    update_job_titles: true                       # Update job titles for existing users
+    default_password: "YourSecurePassword123!"    # Default password (10+ chars required)
+```
+
+**Example Output**:
+```
+Azure Starters Module - Syncing to Snipe-IT
+============================================================
+Found 472 users in Azure starters group
+Found 471 users already in Snipe-IT
+To create: 1 new users
+
+Processing: Chris Abbott-Hauxwell (chris.abbott@company.com)
+  ✓ Created new Snipe-IT user ID: 580
 ```
 
 ---

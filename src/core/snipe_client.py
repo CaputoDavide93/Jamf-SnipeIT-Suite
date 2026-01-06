@@ -196,6 +196,70 @@ class SnipeITClient:
         logger.debug(f"No Snipe user found for email: {email}")
         return None
     
+    def find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """
+        Find a user by username (searches username field and email prefix).
+        Tries multiple search variations since Snipe-IT search is literal.
+        
+        Args:
+            username: Username to search (e.g., 'lewistowart' or 'lewis.towart')
+        
+        Returns:
+            User dictionary or None
+        """
+        if not username:
+            return None
+        
+        # Normalize the search username for comparison
+        search_norm = username.lower().strip().replace(".", "").replace("_", "").replace("-", "")
+        
+        # Try multiple search terms - Snipe-IT search is literal
+        search_terms = [username]
+        
+        # If username has no dots, try adding common patterns (firstname.lastname)
+        if "." not in username and len(username) > 3:
+            # Try to split camelCase or find word boundaries
+            # E.g., "lewistowart" -> try "lewis", "towart"
+            search_terms.append(username[:len(username)//2])  # First half
+            search_terms.append(username[len(username)//2:])  # Second half
+        
+        for search_term in search_terms:
+            if len(search_term) < 3:
+                continue
+                
+            response = self._request("GET", "/users", params={"search": search_term, "limit": 50})
+            if not response:
+                continue
+            
+            data = response.json()
+            
+            for user in data.get("rows", []):
+                # Check username match
+                snipe_username = (user.get("username") or "").lower()
+                snipe_username_norm = snipe_username.replace(".", "").replace("_", "").replace("-", "").replace("@", "")
+                
+                # Remove domain from username if present
+                if "@" in snipe_username_norm:
+                    snipe_username_norm = snipe_username_norm.split("@")[0]
+                
+                # Check email prefix match
+                snipe_email = (user.get("email") or "").lower()
+                snipe_email_prefix = snipe_email.split("@")[0] if "@" in snipe_email else ""
+                snipe_email_norm = snipe_email_prefix.replace(".", "").replace("_", "").replace("-", "")
+                
+                # Match if normalized username matches
+                if (search_norm == snipe_username_norm or 
+                    search_norm == snipe_email_norm or
+                    (len(search_norm) >= 6 and search_norm in snipe_username_norm) or
+                    (len(snipe_username_norm) >= 6 and snipe_username_norm in search_norm) or
+                    (len(search_norm) >= 6 and search_norm in snipe_email_norm) or
+                    (len(snipe_email_norm) >= 6 and snipe_email_norm in search_norm)):
+                    logger.debug(f"Found Snipe user by username {username}: id={user.get('id')}, name={user.get('name')}")
+                    return user
+        
+        logger.debug(f"No Snipe user found for username: {username}")
+        return None
+    
     def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """
         Get user details by ID.
@@ -225,6 +289,34 @@ class SnipeITClient:
         """
         response = self._request("PATCH", f"/users/{user_id}", json_data=data)
         return response is not None and response.status_code in (200, 201)
+    
+    def create_user(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Create a new user in Snipe-IT.
+        
+        Args:
+            data: User data with fields:
+                - first_name (required)
+                - last_name (required)
+                - email (required)
+                - username (required)
+                - password (required)
+                - password_confirmation (required)
+                - jobtitle (optional)
+                - company_id (optional)
+                - department_id (optional)
+        
+        Returns:
+            Created user dictionary or None if failed
+        """
+        response = self._request("POST", "/users", json_data=data)
+        if response and response.status_code in (200, 201):
+            result = response.json()
+            if result.get("status") == "success":
+                return result.get("payload")
+            elif result.get("payload"):
+                return result.get("payload")
+        return None
     
     # =========================================================================
     # Asset/Hardware Operations
@@ -280,6 +372,62 @@ class SnipeITClient:
             return None
         
         return response.json()
+    
+    def get_all_assets(self, limit: int = 1000) -> List[Dict[str, Any]]:
+        """
+        Get all assets with pagination.
+        Useful for bulk operations to avoid N+1 API calls.
+        
+        Args:
+            limit: Max results per page (Snipe-IT max is usually 1000)
+        
+        Returns:
+            List of all asset dictionaries
+        """
+        all_assets = []
+        offset = 0
+        
+        while True:
+            response = self._request(
+                "GET", 
+                "/hardware",
+                params={"limit": limit, "offset": offset, "sort": "id", "order": "asc"}
+            )
+            if not response:
+                break
+            
+            data = response.json()
+            rows = data.get("rows", [])
+            all_assets.extend(rows)
+            
+            total = data.get("total", 0)
+            offset += limit
+            
+            logger.debug(f"Fetched {len(all_assets)}/{total} assets")
+            
+            if offset >= total or not rows:
+                break
+        
+        logger.info(f"Retrieved {len(all_assets)} total assets from Snipe-IT")
+        return all_assets
+    
+    def get_assets_by_serial_map(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get all assets indexed by serial number for fast lookup.
+        
+        Returns:
+            Dictionary mapping serial (uppercase) -> asset dict
+        """
+        assets = self.get_all_assets()
+        serial_map = {}
+        
+        for asset in assets:
+            serial = (asset.get("serial") or "").strip().upper()
+            if serial:
+                serial_map[serial] = asset
+        
+        logger.info(f"Built serial map with {len(serial_map)} entries")
+        return serial_map
     
     def search_assets(
         self,

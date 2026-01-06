@@ -1,13 +1,17 @@
 """
 Jamf-SnipeIT Suite - Snipe-IT to Jamf Sync Module
 Syncs user information FROM Snipe-IT TO Jamf (reverse direction).
+
+IMPORTANT: Jamf local users are the source of truth. This module only
+enriches Jamf location fields with Snipe-IT user data (email, name, job title)
+when the Snipe-IT assigned user matches the Jamf local user.
 """
 import logging
 import time
 from typing import Any, Dict, List, Optional
 
 from core import Config, JamfClient, SnipeITClient
-from utils import AuditCSV
+from utils import AuditCSV, pick_primary_local_identity, rate_limit_delay, UserMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,10 @@ class SnipeToJamfModule:
             retry_delay=config.api.retry_delay_seconds,
             rate_limit_wait=config.api.rate_limit_wait_seconds,
         )
+        
+        # Cache for bulk-fetched data
+        self._snipe_asset_map: Optional[Dict[str, Dict]] = None
+        self._user_matcher: Optional[UserMatcher] = None
     
     def run(
         self,
@@ -86,6 +94,14 @@ class SnipeToJamfModule:
             logger.warning("No computers to process")
             return results
         
+        # OPTIMIZATION: Pre-fetch all Snipe-IT assets in one batch
+        # This reduces API calls from N to 1 for Snipe-IT lookups
+        if not serial_numbers:  # Only bulk fetch when processing all
+            logger.info("Pre-fetching all Snipe-IT assets for bulk lookup...")
+            self._snipe_asset_map = self.snipe.get_assets_by_serial_map()
+        else:
+            self._snipe_asset_map = None
+        
         logger.info(f"Processing {len(computers)} computers")
         
         for i, comp in enumerate(computers, 1):
@@ -110,16 +126,9 @@ class SnipeToJamfModule:
                 results["errors"] += 1
                 results["details"].append({"serial": serial, "error": str(e)})
             
-            # Rate limiting delay with visual feedback for longer delays
+            # Rate limiting delay
             if self.update_delay > 0:
-                if self.update_delay >= 2:
-                    try:
-                        from utils import wait_with_countdown
-                    except ImportError:
-                        from src.utils import wait_with_countdown
-                    wait_with_countdown(self.update_delay, f"Processed {i}/{len(computers)}")
-                else:
-                    time.sleep(self.update_delay)
+                rate_limit_delay(self.update_delay, "Snipe→Jamf", i, len(computers))
         
         # Print summary
         self._print_summary(results, dry_run)
@@ -144,6 +153,10 @@ class SnipeToJamfModule:
         """
         Sync user info for a single computer.
         
+        IMPORTANT: Jamf local users are the source of truth.
+        We only update Jamf if the Snipe-IT assigned user matches
+        the Jamf local user, to enrich with email/name/job title.
+        
         Args:
             serial: Computer serial number
             dry_run: If True, don't make changes
@@ -151,40 +164,86 @@ class SnipeToJamfModule:
         Returns:
             True if updated
         """
-        # Look up in Snipe-IT
-        snipe_asset = self.snipe.get_asset_by_serial(serial)
-        
-        if not snipe_asset:
-            logger.info(f"No Snipe-IT asset for serial: {serial}")
+        # First, get Jamf computer to check local user (source of truth)
+        jamf_computer = self.jamf.get_computer_by_serial(serial)
+        if not jamf_computer:
+            logger.info(f"No Jamf computer for serial: {serial}")
             return False
         
-        # Check if assigned to a user
-        assigned_to = snipe_asset.get("assigned_to")
-        if not assigned_to:
-            logger.info(f"Snipe-IT asset {serial} is unassigned")
+        jamf_id = jamf_computer.get("general", {}).get("id")
+        if not jamf_id:
+            logger.error(f"Could not get Jamf ID for serial: {serial}")
             return False
         
-        assigned_user_id = assigned_to.get("id")
-        if not assigned_user_id:
-            logger.info(f"No assigned user ID for asset: {serial}")
+        # Get Jamf local user (source of truth)
+        groups_accounts = jamf_computer.get("groups_accounts", {}) or {}
+        local_users = (
+            groups_accounts.get("local_accounts")
+            or groups_accounts.get("local_users")
+            or groups_accounts.get("users")
+            or []
+        )
+        if isinstance(local_users, dict) and "user" in local_users:
+            local_users = local_users["user"]
+        elif isinstance(local_users, dict):
+            local_users = [local_users]
+        elif not isinstance(local_users, list):
+            local_users = []
+        
+        jamf_username, jamf_fullname = pick_primary_local_identity(local_users)
+        
+        if not jamf_username:
+            logger.info(f"No primary local user in Jamf for serial: {serial}")
             return False
         
-        # Fetch full user details from Snipe-IT
-        snipe_user = self.snipe.get_user_by_id(assigned_user_id)
+        logger.debug(f"Jamf local user (source of truth): {jamf_username}, full name: {jamf_fullname}")
+        
+        # JAMF IS SOURCE OF TRUTH: Look up the Jamf local user in Snipe-IT
+        # Use UserMatcher to try full name first, then username, then fuzzy match
+        if self._user_matcher is None:
+            logger.info("Loading Snipe-IT users for matching...")
+            users = self.snipe.get_all_users()
+            self._user_matcher = UserMatcher(
+                users=users,
+                email_domain=self.config.matching.email_domain,
+                min_score=self.config.matching.min_score,
+                weight_lcs=self.config.matching.weight_lcs,
+                weight_char_overlap=self.config.matching.weight_char_overlap,
+                weight_bigram_dice=self.config.matching.weight_bigram_dice,
+                use_bigram_dice=self.config.matching.use_bigram_dice,
+            )
+            logger.info(f"Loaded {len(users)} users for matching")
+        
+        snipe_user, debug_info = self._user_matcher.best_match(
+            full_name_hint=jamf_fullname or "",
+            username=jamf_username,
+        )
+        
+        if debug_info.get("exact_hit_reason"):
+            logger.debug(f"Match reason: {debug_info['exact_hit_reason']}")
+        
         if not snipe_user:
-            logger.error(f"Could not fetch Snipe-IT user {assigned_user_id}")
+            logger.info(f"No Snipe-IT user found matching Jamf user '{jamf_username}' (full name: '{jamf_fullname}') for {serial}")
             return False
         
-        # Extract user info
+        # Extract user info from Snipe-IT
         username = snipe_user.get("username", "")
         full_name = snipe_user.get("name", "")
+        first_name = snipe_user.get("first_name", "")
         email = snipe_user.get("email", "")
+        
+        # Check if this is a disabled user (name starts with [Disabled])
+        if full_name.startswith("[Disabled]") or first_name.startswith("[Disabled]"):
+            logger.info(f"Skipping disabled Snipe-IT user: {full_name or first_name} ({serial})")
+            return False
         
         # Check if this is a generic/shared username that should be skipped
         skip_usernames = [u.lower() for u in self.config.matching.skip_usernames]
-        if username.lower() in skip_usernames:
-            logger.info(f"Skipping generic/shared Snipe-IT user: {username}")
+        if jamf_username.lower() in skip_usernames:
+            logger.info(f"Skipping generic/shared Jamf user: {jamf_username}")
             return False
+        
+        logger.debug(f"Found Snipe-IT user: {username} ({full_name}) for Jamf user: {jamf_username}")
         
         # Job title handling
         job_title = (
@@ -202,17 +261,6 @@ class SnipeToJamfModule:
             department = department or ""
         
         logger.debug(f"Snipe-IT user: {username}, {full_name}, {email}")
-        
-        # Look up in Jamf
-        jamf_computer = self.jamf.get_computer_by_serial(serial)
-        if not jamf_computer:
-            logger.info(f"No Jamf computer for serial: {serial}")
-            return False
-        
-        jamf_id = jamf_computer.get("general", {}).get("id")
-        if not jamf_id:
-            logger.error(f"Could not get Jamf ID for serial: {serial}")
-            return False
         
         # Update Jamf
         if dry_run:

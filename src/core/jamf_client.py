@@ -52,8 +52,8 @@ class JamfClient:
         client_id: str = "",
         client_secret: str = "",
         timeout: int = 30,
-        max_retries: int = 3,
-        retry_delay: int = 2,
+        max_retries: int = 5,
+        retry_delay: int = 3,
     ):
         """
         Initialize Jamf Pro API client.
@@ -215,6 +215,30 @@ class JamfClient:
                     )
                     time.sleep(delay)
                     continue
+                
+                # Handle 409 - Conflict (resource locked, concurrent modification)
+                # This is common in Jamf Classic API when records are being updated elsewhere
+                # or when the device is actively checking in
+                if response.status_code == 409:
+                    # Log the actual response body to understand the error
+                    logger.debug(f"409 Response body: {response.text}")
+                    if attempt < self.max_retries:
+                        # Use jitter to avoid thundering herd - random delay 1-5 seconds
+                        import random
+                        jitter = random.uniform(1, 5)
+                        delay = (self.retry_delay * (2 ** (attempt - 1))) + jitter
+                        logger.warning(
+                            f"409 Conflict (attempt {attempt}/{self.max_retries}). "
+                            f"Resource may be locked by device check-in. Retrying in {delay:.1f}s..."
+                        )
+                        time.sleep(delay)
+                        continue
+                    else:
+                        logger.warning(
+                            f"409 Conflict persists for {url}. "
+                            "Device may be actively checking in. Skipping this update."
+                        )
+                        return None
                 
                 response.raise_for_status()
                 return response
@@ -386,21 +410,33 @@ class JamfClient:
             realname: Real name / full name
             email: Email address
             position: Job title / position
-            department: Department
+            department: Department (stored in Jamf's 'room' field since department is pre-defined)
             dry_run: If True, don't actually update
         
         Returns:
             True if successful
         """
+        # Build XML dynamically - only include non-empty fields
+        # Note: We use 'room' field for department since Jamf's department is a pre-defined dropdown
+        location_fields = []
+        if username:
+            location_fields.append(f"    <username>{safe_xml_text(username)}</username>")
+        if realname:
+            location_fields.append(f"    <real_name>{safe_xml_text(realname)}</real_name>")
+        if email:
+            location_fields.append(f"    <email_address>{safe_xml_text(email)}</email_address>")
+        if position:
+            location_fields.append(f"    <position>{safe_xml_text(position)}</position>")
+        if department:
+            location_fields.append(f"    <room>{safe_xml_text(department)}</room>")
+        
         xml = f"""<computer>
   <location>
-    <username>{safe_xml_text(username)}</username>
-    <real_name>{safe_xml_text(realname)}</real_name>
-    <email_address>{safe_xml_text(email)}</email_address>
-    <position>{safe_xml_text(position)}</position>
-    <department>{safe_xml_text(department)}</department>
+{chr(10).join(location_fields)}
   </location>
 </computer>"""
+        
+        logger.debug(f"Update XML for computer {computer_id}: {xml}")
         
         if dry_run:
             logger.info(

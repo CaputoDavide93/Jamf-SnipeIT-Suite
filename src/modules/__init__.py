@@ -8,6 +8,7 @@ from .user_match import UserMatchModule, run_user_match
 from .model_sync import ModelSyncModule, run_model_sync, check_models
 from .wakeup import WakeUpModule, run_wakeup_group, run_wakeup_serial, run_wakeup_file
 from .reconciliation import ReconciliationModule, ReconciliationResults, run_reconciliation
+from .azure_starters import AzureStartersModule, run_azure_starters
 
 __all__ = [
     # Leavers
@@ -32,4 +33,7 @@ __all__ = [
     "ReconciliationModule",
     "ReconciliationResults",
     "run_reconciliation",
+    # Azure Starters
+    "AzureStartersModule",
+    "run_azure_starters",
 ]

@@ -70,12 +70,12 @@ def setup_logging(
     return log_file
 
 
-def wait_with_countdown(seconds: int, message: str = "Rate limiting") -> None:
+def wait_with_countdown(seconds: float, message: str = "Rate limiting") -> None:
     """
     Wait for specified seconds while showing a countdown to the user.
     
     Args:
-        seconds: Number of seconds to wait
+        seconds: Number of seconds to wait (supports floats for sub-second delays)
         message: Context message to display
     """
     import sys
@@ -83,15 +83,53 @@ def wait_with_countdown(seconds: int, message: str = "Rate limiting") -> None:
     if seconds <= 0:
         return
     
-    for remaining in range(seconds, 0, -1):
+    # For very short delays (< 1 second), just sleep without countdown
+    if seconds < 1:
+        time.sleep(seconds)
+        return
+    
+    # For longer delays, show countdown
+    whole_seconds = int(seconds)
+    for remaining in range(whole_seconds, 0, -1):
         # Use \r to overwrite the same line
-        sys.stdout.write(f"\r⏳ {message} - waiting {remaining}s to avoid API rate limits...")
+        sys.stdout.write(f"\r⏳ {message} - waiting {remaining}s...")
         sys.stdout.flush()
         time.sleep(1)
+    
+    # Handle any fractional remainder
+    remainder = seconds - whole_seconds
+    if remainder > 0:
+        time.sleep(remainder)
     
     # Clear the countdown line
     sys.stdout.write("\r" + " " * 70 + "\r")
     sys.stdout.flush()
+
+
+def rate_limit_delay(delay_seconds: float, context: str = "", item_num: int = 0, total_items: int = 0) -> None:
+    """
+    Standardized rate limit delay with optional countdown display.
+    
+    Args:
+        delay_seconds: Seconds to wait
+        context: Context message (e.g., module name)
+        item_num: Current item number (for progress display)
+        total_items: Total items (for progress display)
+    """
+    if delay_seconds <= 0:
+        return
+    
+    # Build progress message
+    if item_num and total_items:
+        message = f"{context} [{item_num}/{total_items}]" if context else f"[{item_num}/{total_items}]"
+    else:
+        message = context or "Processing"
+    
+    # Use countdown for delays >= 1 second
+    if delay_seconds >= 1:
+        wait_with_countdown(delay_seconds, message)
+    else:
+        time.sleep(delay_seconds)
 
 
 def clean_old_logs(log_dir: str, max_days: int = 30) -> None:
@@ -375,15 +413,19 @@ class UserMatcher:
         # Build lookup indexes
         self._by_email: Dict[str, Dict] = {}
         self._by_username: Dict[str, Dict] = {}
+        self._by_name: Dict[str, Dict] = {}  # Full name index for exact matching
         
         for user in users:
             email = (user.get("email") or "").lower()
             username = (user.get("username") or "").lower()
+            name = normalize_name(user.get("name") or "")
             
             if email:
                 self._by_email[email] = user
             if username:
                 self._by_username[username] = user
+            if name:
+                self._by_name[name] = user
     
     def find_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         """Find user by exact email match."""
@@ -392,6 +434,10 @@ class UserMatcher:
     def find_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         """Find user by exact username match."""
         return self._by_username.get(username.lower())
+    
+    def find_by_name(self, full_name: str) -> Optional[Dict[str, Any]]:
+        """Find user by exact full name match (normalized)."""
+        return self._by_name.get(normalize_name(full_name))
     
     def best_match(
         self,
@@ -413,7 +459,14 @@ class UserMatcher:
             "top_candidates": [],
         }
         
-        # Try exact email match first
+        # PRIORITY 1: Try exact full name match from Jamf (most reliable)
+        if full_name_hint:
+            exact = self.find_by_name(full_name_hint)
+            if exact:
+                debug_info["exact_hit_reason"] = f"full_name={full_name_hint}"
+                return exact, debug_info
+        
+        # PRIORITY 2: Try exact email match (guess from username)
         if username and self.email_domain:
             guessed_email = f"{username.lower()}@{self.email_domain}"
             exact = self.find_by_email(guessed_email)
@@ -421,14 +474,14 @@ class UserMatcher:
                 debug_info["exact_hit_reason"] = f"email={guessed_email}"
                 return exact, debug_info
         
-        # Try exact username match
+        # PRIORITY 3: Try exact username match
         if username:
             exact = self.find_by_username(username)
             if exact:
                 debug_info["exact_hit_reason"] = f"username={username}"
                 return exact, debug_info
         
-        # Fuzzy matching
+        # PRIORITY 4: Fuzzy matching on full name
         if not full_name_hint:
             return None, debug_info
         
@@ -493,10 +546,13 @@ def pick_primary_local_identity(
     if not local_users:
         return None, None
     
-    # Skip system accounts
+    # Skip system and IT admin accounts
     skip_users = {
-        "root", "daemon", "nobody", "admin", "administrator",
-        "guest", "_spotlight", "_mbsetupuser", "jamfadmin",
+        # System accounts
+        "root", "daemon", "nobody", "guest", "_spotlight", "_mbsetupuser",
+        # IT admin/management accounts
+        "admin", "administrator", "jamfadmin",
+        "createfuture", "xdesign",  # Company IT admin accounts
     }
     
     candidates = []
@@ -510,7 +566,7 @@ def pick_primary_local_identity(
         
         username_lower = username.lower()
         
-        # Skip system accounts
+        # Skip system/IT admin accounts
         if username_lower in skip_users or username_lower.startswith("_"):
             continue
         

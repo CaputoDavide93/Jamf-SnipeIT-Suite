@@ -7,7 +7,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from core import Config, AzureClient, SnipeITClient
-from utils import AuditCSV, setup_logging
+from utils import AuditCSV, setup_logging, rate_limit_delay
 
 logger = logging.getLogger(__name__)
 
@@ -135,15 +135,9 @@ class LeaversModule:
                     logger.error(f"Error processing user {user.get('displayName')}: {e}")
                     results["errors"].append(str(e))
             
-            # Small delay between batches with countdown
+            # Delay between batches
             if batch_start + BATCH_SIZE < len(users):
-                try:
-                    from utils import wait_with_countdown
-                except ImportError:
-                    from src.utils import wait_with_countdown
-                current_batch = batch_start // BATCH_SIZE + 1
-                total_batches = (len(users) + BATCH_SIZE - 1) // BATCH_SIZE
-                wait_with_countdown(2, f"Leavers batch {current_batch}/{total_batches}")
+                rate_limit_delay(2, "Leavers", batch_num, total_batches)
         
         return results
     

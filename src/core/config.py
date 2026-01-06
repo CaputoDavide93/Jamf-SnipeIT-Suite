@@ -47,6 +47,7 @@ class AzureConfig:
     scope: str = "https://graph.microsoft.com/.default"
     leavers_group_id: str = ""
     disabled_group_id: str = ""
+    starters_group_id: str = ""
 
 
 @dataclass
@@ -255,6 +256,7 @@ class Config:
             scope=data.get("scope", "https://graph.microsoft.com/.default"),
             leavers_group_id=data.get("leavers_group_id", ""),
             disabled_group_id=data.get("disabled_group_id", ""),
+            starters_group_id=data.get("starters_group_id", ""),
         )
     
     def _parse_matching(self) -> MatchingConfig:
