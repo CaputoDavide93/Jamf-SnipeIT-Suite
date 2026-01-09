@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Stage 2: Runtime
 FROM python:3.11-slim
 
-LABEL maintainer="IT Team"
+LABEL maintainer="Davide Caputo <CaputoDav@gmail.com>"
 LABEL description="Jamf-SnipeIT Suite - Unified Asset Management Tool"
 LABEL version="1.0.0"
 

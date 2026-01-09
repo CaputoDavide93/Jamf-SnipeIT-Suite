@@ -547,12 +547,12 @@ def pick_primary_local_identity(
         return None, None
     
     # Skip system and IT admin accounts
+    # Add your organization's shared/admin account names here
     skip_users = {
         # System accounts
         "root", "daemon", "nobody", "guest", "_spotlight", "_mbsetupuser",
-        # IT admin/management accounts
+        # IT admin/management accounts (customize for your org)
         "admin", "administrator", "jamfadmin",
-        "createfuture", "xdesign",  # Company IT admin accounts
     }
     
     candidates = []
