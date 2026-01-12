@@ -1,178 +1,131 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/Jamf-Pro-purple?style=for-the-badge&logo=jamf" alt="Jamf Pro"/>
-  <img src="https://img.shields.io/badge/Snipe--IT-green?style=for-the-badge" alt="Snipe-IT"/>
-  <img src="https://img.shields.io/badge/Azure%20AD-blue?style=for-the-badge&logo=microsoftazure" alt="Azure AD"/>
-</p>
+<div align="center">
 
-# 🔄 Jamf-SnipeIT Suite
+# 🔗 Jamf SnipeIT Suite
 
-> **Unified Asset Management & Synchronization Tool**
+> **Automated synchronization between Jamf Pro and Snipe-IT for seamless asset management**
 
-A comprehensive automation tool for synchronizing device and user information between **Jamf Pro**, **Snipe-IT**, and **Azure AD/Microsoft Entra ID**.
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![Jamf](https://img.shields.io/badge/Jamf-6C2C91?style=for-the-badge&logo=jamf&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"/>
-  <img src="https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker"/>
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License"/>
-  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome"/>
-</p>
+[Features](#-features) • [Quick Start](#-quick-start) • [Configuration](#️-configuration) • [Contributing](#-contributing)
+
+</div>
 
 ---
 
 ## 📑 Table of Contents
 
 - [✨ Features](#-features)
-- [🏗️ Architecture](#️-architecture)
+- [📋 Prerequisites](#-prerequisites)
 - [🚀 Quick Start](#-quick-start)
-- [📦 Installation](#-installation)
+- [🐳 Docker Deployment](#-docker-deployment)
 - [⚙️ Configuration](#️-configuration)
-- [🎮 Usage](#-usage)
-- [📚 Modules](#-modules)
-- [🐳 Docker](#-docker)
-- [⏰ Scheduling](#-scheduling)
-- [🔧 Troubleshooting](#-troubleshooting)
+- [📖 Usage](#-usage)
+- [🔧 Architecture](#-architecture)
+- [🐛 Troubleshooting](#-troubleshooting)
 - [🤝 Contributing](#-contributing)
 - [📄 License](#-license)
+- [👤 Author](#-author)
 
 ---
 
 ## ✨ Features
 
-| Module | Description | Use Case |
-|:-------|:------------|:---------|
-| 🚪 **Leavers** | Auto-detect disabled Azure AD users and update asset status | Employee offboarding |
-| 🆕 **Azure Starters** | Create Snipe-IT users from Azure AD starters group | Employee onboarding |
-| 🔄 **Snipe-to-Jamf** | Sync user info from Snipe-IT to Jamf Pro | Keep Jamf user data accurate |
-| 🔗 **User Match** | Match Jamf computers to Snipe-IT users with fuzzy matching | Device provisioning |
-| 📋 **Model Sync** | Sync hardware models between platforms | Asset model management |
-| 📡 **WakeUp** | Send MDM redeploy commands to devices | Remote management recovery |
-| 📊 **Reconciliation** | Compare inventory and find discrepancies | Audit & compliance |
-
-### 🎯 Key Benefits
-
-- ✅ **Automated Workflows** - Set it and forget it with scheduled jobs
-- ✅ **Bi-directional Sync** - Keep all systems in harmony
-- ✅ **Smart Matching** - Fuzzy algorithms link devices with users
-- ✅ **Dry Run Mode** - Preview changes before applying
-- ✅ **Docker Ready** - Deploy anywhere with containers
-- ✅ **Audit Trail** - Comprehensive logging and CSV exports
+| Feature | Description |
+|---------|-------------|
+| 🔄 **Bi-directional Sync** | Synchronize assets between Jamf Pro and Snipe-IT |
+| 📱 **Device Management** | Sync Macs, iPhones, iPads, and Apple TVs |
+| 🏷️ **Custom Fields** | Map custom fields between platforms |
+| 📊 **Status Tracking** | Keep asset status in sync |
+| 🐳 **Docker Ready** | Easy deployment with Docker Compose |
+| ⏰ **Scheduled Sync** | Automated synchronization via cron |
+| 📝 **Detailed Logging** | Comprehensive logs for troubleshooting |
+| 🔐 **Secure** | API tokens stored securely |
 
 ---
 
-## 🏗️ Architecture
+## 📋 Prerequisites
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Jamf-SnipeIT Suite                          │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │   main.py   │  │ scheduler.py│  │  docker_scheduler.py    │  │
-│  │    (CLI)    │  │  (APSched)  │  │  (Docker + stdin)       │  │
-│  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘  │
-│         │                │                     │                │
-│         └────────────────┼─────────────────────┘                │
-│                          ▼                                      │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                      MODULES                              │  │
-│  │  ┌─────────┐ ┌───────────┐ ┌──────────┐ ┌───────────┐     │  │
-│  │  │ Leavers │ │ AzStarter │ │SnipeJamf │ │ UserMatch │     │  │
-│  │  └────┬────┘ └─────┬─────┘ └────┬─────┘ └─────┬─────┘     │  │
-│  │  ┌────┴────┐ ┌─────┴─────┐ ┌────┴─────┐                   │  │
-│  │  │ModelSync│ │  WakeUp   │ │Reconcile │                   │  │
-│  │  └────┬────┘ └─────┬─────┘ └────┬─────┘                   │  │
-│  └───────┼────────────┼──────────────────────────────────────┘  │
-│          │            │                                         │
-│          ▼            ▼                                         │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                       CORE                                │  │
-│  │  ┌──────────────┐ ┌────────────────┐ ┌─────────────────┐  │  │
-│  │  │  JamfClient  │ │ SnipeITClient  │ │   AzureClient   │  │  │
-│  │  └──────┬───────┘ └───────┬────────┘ └────────┬────────┘  │  │
-│  └─────────┼─────────────────┼───────────────────┼───────────┘  │
-└────────────┼─────────────────┼───────────────────┼──────────────┘
-             ▼                 ▼                   ▼
-      ┌──────────┐      ┌───────────┐       ┌───────────┐
-      │ Jamf Pro │      │  Snipe-IT │       │ Azure AD  │
-      │   API    │      │    API    │       │ Graph API │
-      └──────────┘      └───────────┘       └───────────┘
-```
+| Requirement | Version |
+|-------------|---------|
+| Python | 3.11+ |
+| Docker | 20.10+ (optional) |
+| Jamf Pro | API access |
+| Snipe-IT | v6.0+ |
 
 ---
 
 ## 🚀 Quick Start
+
+### Option 1: Docker (Recommended)
 
 ```bash
 # Clone the repository
 git clone https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite.git
 cd Jamf-SnipeIT-Suite
 
-# Copy and configure
-cp config/config.yaml.example config/config.yaml
-# Edit config/config.yaml with your credentials
+# Configure environment
+cp config/config.example.yaml config/config.yaml
+# Edit config/config.yaml with your settings
 
-# Run with Docker
-docker compose up -d
+# Run with Docker Compose
+docker-compose up -d
+```
 
-# Or run locally
+### Option 2: Local Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite.git
+cd Jamf-SnipeIT-Suite
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
-python src/main.py --interactive
+
+# Configure
+cp config/config.example.yaml config/config.yaml
+
+# Run
+python src/main.py
 ```
 
 ---
 
-## 📦 Installation
+## 🐳 Docker Deployment
 
-### Prerequisites
+### Using Docker Compose
 
-| Requirement | Version |
-|:------------|:--------|
-| 🐍 Python | 3.11+ |
-| 🐳 Docker | 20.10+ (optional) |
-| 📦 Docker Compose | 2.0+ (optional) |
-
-### API Access Required
-
-- 🍎 **Jamf Pro** - API credentials or OAuth2
-- 📦 **Snipe-IT** - API token
-- 🔵 **Azure AD** - App registration with Graph API access
-
-### Local Installation
-
-```bash
-# 1. Clone repository
-git clone https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite.git
-cd Jamf-SnipeIT-Suite
-
-# 2. Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Configure
-cp config/config.yaml.example config/config.yaml
-nano config/config.yaml  # Add your credentials
-
-# 5. Verify installation
-python src/main.py --help
+```yaml
+version: '3.8'
+services:
+  jamf-snipeit-sync:
+    build: .
+    container_name: jamf-snipeit-sync
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+    environment:
+      - TZ=UTC
+    restart: unless-stopped
 ```
 
-### Docker Installation
+### Build and Run
 
 ```bash
-# 1. Clone and configure
-git clone https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite.git
-cd Jamf-SnipeIT-Suite
-cp config/config.yaml.example config/config.yaml
-nano config/config.yaml
+# Build image
+docker-compose build
 
-# 2. Build and run
-docker compose build
-docker compose up -d
+# Start container
+docker-compose up -d
 
-# 3. View logs
-docker compose logs -f
+# View logs
+docker-compose logs -f
 ```
 
 ---
@@ -181,501 +134,164 @@ docker compose logs -f
 
 ### Configuration File
 
-Create `config/config.yaml` from the example template:
+Create `config/config.yaml`:
 
 ```yaml
-# Jamf Pro Configuration
 jamf:
-  base_url: "https://your-instance.jamfcloud.com"
-  # Option 1: Basic Auth
-  username: "api-user"
-  password: "api-password"
-  # Option 2: OAuth2 (recommended)
-  client_id: "your-client-id"
-  client_secret: "your-client-secret"
-  ea_snipe_asset_id: "Snipe-IT Asset ID"
+  url: "https://your-jamf.jamfcloud.com"
+  username: "${JAMF_API_USER}"
+  password: "${JAMF_API_PASSWORD}"
 
-# Snipe-IT Configuration
 snipeit:
-  base_url: "https://your-snipeit.example.com"
-  api_token: "your-api-token"
-  status_deployed_id: 2
-  status_pending_id: 3
+  url: "https://your-snipeit.example.com"
+  api_key: "${SNIPEIT_API_KEY}"
 
-# Azure AD Configuration
-azure:
-  tenant_id: "your-tenant-id"
-  client_id: "your-client-id"
-  client_secret: "your-client-secret"
-  leavers_group_id: "group-guid"
-  starters_group_id: "group-guid"
+sync:
+  interval: 3600  # seconds
+  devices:
+    - computers
+    - mobile_devices
+  
+logging:
+  level: INFO
+  file: logs/sync.log
 ```
 
-> ⚠️ **Security Note:** Never commit `config/config.yaml` to version control! It's gitignored by default.
+### Environment Variables
 
-### API Credentials Setup
-
-<details>
-<summary>🍎 <b>Jamf Pro Setup</b></summary>
-
-#### OAuth2 (Recommended)
-
-1. Go to **Settings > System > API Roles and Clients**
-2. Create an API Role with permissions:
-   - `Read Computers`
-   - `Update Computers`
-   - `Read Smart Computer Groups`
-   - `Send Computer Remote Command to Redeploy Management Framework`
-3. Create an API Client and note the `client_id` and `client_secret`
-
-#### Basic Auth (Legacy)
-
-1. Create a Jamf Pro user account
-2. Assign API access privileges
-
-</details>
-
-<details>
-<summary>📦 <b>Snipe-IT Setup</b></summary>
-
-1. Go to **Admin > User Management > Your User**
-2. Navigate to **API Keys** tab
-3. Create a new API key and copy the token
-
-</details>
-
-<details>
-<summary>🔵 <b>Azure AD Setup</b></summary>
-
-1. Go to **Azure Portal > Microsoft Entra ID > App registrations**
-2. Create a new registration
-3. Add API permissions:
-   - `Microsoft Graph > Application > User.Read.All`
-   - `Microsoft Graph > Application > Group.Read.All`
-   - `Microsoft Graph > Application > GroupMember.Read.All`
-4. Grant admin consent
-5. Create a client secret under **Certificates & secrets**
-6. Note the Application ID, Tenant ID, and secret
-
-</details>
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `JAMF_API_USER` | Jamf Pro API username | ✅ |
+| `JAMF_API_PASSWORD` | Jamf Pro API password | ✅ |
+| `SNIPEIT_API_KEY` | Snipe-IT API key | ✅ |
+| `SYNC_INTERVAL` | Sync interval (seconds) | ❌ |
+| `LOG_LEVEL` | Logging level | ❌ |
 
 ---
 
-## 🎮 Usage
+## 📖 Usage
 
-### CLI Commands
-
-```bash
-# Show help
-python src/main.py --help
-
-# Run in interactive mode
-python src/main.py --interactive
-
-# Run specific modules
-python src/main.py leavers [--dry-run]
-python src/main.py azure-starters [--dry-run]
-python src/main.py snipe-to-jamf [--dry-run]
-python src/main.py user-match [--dry-run]
-python src/main.py model-sync [--dry-run] [--check-only]
-python src/main.py reconcile [--export-csv]
-
-# Run all modules
-python src/main.py all [--dry-run]
-
-# WakeUp module
-python src/main.py wakeup --group <ID>
-python src/main.py wakeup --serial <SERIAL>
-python src/main.py wakeup --file serials.txt
-```
-
-### Interactive Menu
-
-```
-╔═══════════════════════════════════════════════════════════╗
-║                   Jamf-SnipeIT Suite                      ║
-║     Unified Asset Management & Synchronization Tool       ║
-╚═══════════════════════════════════════════════════════════╝
-
-  Available Modules:
-  1. Leavers - Mark assets of disabled Azure users
-  2. Azure Starters - Create Snipe-IT users from Azure AD
-  3. Snipe-to-Jamf - Sync user info from Snipe-IT to Jamf
-  4. User Match - Match Jamf computers to Snipe-IT users
-  5. Model Sync - Sync hardware models between platforms
-  6. WakeUp - Send MDM redeploy commands
-  7. Reconciliation - Find inventory discrepancies
-  8. Run All (except WakeUp)
-  0. Exit
-```
-
-### Dry Run Mode
-
-All modules support `--dry-run` to preview changes without applying them:
+### Manual Sync
 
 ```bash
-python src/main.py leavers --dry-run
+python src/main.py --sync-now
 ```
 
+### Dry Run
+
+```bash
+python src/main.py --dry-run
 ```
-2026-01-02 10:15:32 - INFO - [DRY-RUN] Would mark asset MacBook-001 as pending
-2026-01-02 10:15:33 - INFO - [DRY-RUN] Would mark asset MacBook-002 as pending
+
+### Sync Specific Device Type
+
+```bash
+python src/main.py --device-type computers
 ```
 
 ---
 
-## 📚 Modules
+## 🔧 Architecture
 
-### 🚪 Leavers Module
-
-Automatically detect users disabled in Azure AD and update their asset status in Snipe-IT.
-
-```bash
-python src/main.py leavers --dry-run
+```mermaid
+graph LR
+    A[Jamf Pro API] --> B[Jamf-SnipeIT-Suite]
+    B --> C[Snipe-IT API]
+    C --> B
+    B --> D[Logs & Reports]
 ```
 
-**Workflow:**
-
-1. Query Azure AD leavers group for disabled users
-2. Find corresponding Snipe-IT user records
-3. Update assigned assets to "Pending" status
-
----
-
-### 🆕 Azure Starters Module
-
-Create Snipe-IT users for new employees from Azure AD starters group.
-
-```bash
-python src/main.py azure-starters --dry-run
-```
-
-**Workflow:**
-
-1. Query Azure AD starters group
-2. Check if users exist in Snipe-IT
-3. Create missing users with details from Azure AD
-
----
-
-### 🔄 Snipe-to-Jamf Module
-
-Sync user information from Snipe-IT to Jamf Pro computer records.
-
-```bash
-python src/main.py snipe-to-jamf --dry-run
-```
-
-**Fields Synced:**
-
-| Snipe-IT | Jamf Pro |
-|:---------|:---------|
-| User Name | Real Name |
-| Email | Email Address |
-| Job Title | Position |
-| Department | Department |
-
----
-
-### 🔗 User Match Module
-
-Match Jamf computers to Snipe-IT users using fuzzy matching algorithms.
-
-```bash
-python src/main.py user-match --dry-run
-```
-
-**Matching Strategy:**
-
-1. Email exact match (highest confidence)
-2. Username match
-3. Fuzzy name matching with configurable threshold
-
----
-
-### 📋 Model Sync Module
-
-Ensure hardware models exist in Snipe-IT before assets can be created.
-
-```bash
-python src/main.py model-sync --check-only  # Preview only
-python src/main.py model-sync --dry-run     # Preview changes
-python src/main.py model-sync               # Create missing models
-```
-
----
-
-### 📡 WakeUp Module
-
-Send MDM redeploy commands to unresponsive devices.
-
-```bash
-python src/main.py wakeup --group 123        # By Smart Group ID
-python src/main.py wakeup --serial C02XYZ    # By serial number
-python src/main.py wakeup --file serials.txt # From file
-```
-
----
-
-### 📊 Reconciliation Module
-
-Compare inventory between Jamf and Snipe-IT to identify discrepancies.
-
-```bash
-python src/main.py reconcile --export-csv --output-dir ./reports
-```
-
-**Output:**
-
-```
-🔍 Inventory Reconciliation Results
-═══════════════════════════════════════════
-Jamf Pro devices:    1,234
-Snipe-IT assets:     1,198
-
-Only in Jamf:           45 devices
-Only in Snipe-IT:        9 assets
-Matched:             1,189 devices
-═══════════════════════════════════════════
-```
-
----
-
-## 🐳 Docker
-
-### Default Mode (Scheduler)
-
-```bash
-# Start scheduler with all jobs
-docker compose up -d
-
-# View logs
-docker compose logs -f
-
-# Stop
-docker compose down
-```
-
-### CLI Mode
-
-```bash
-# Run specific module
-docker compose run --rm cli leavers --dry-run
-
-# Interactive mode
-docker compose run --rm cli --interactive
-```
-
-### Run Once
-
-```bash
-# Execute all modules once and exit
-docker compose --profile run-once run --rm run-once
-```
-
-### Scheduler Commands
-
-When the scheduler is running, attach and send commands:
-
-```bash
-docker attach jamf-snipeit
-# Type: NOW     - Run all modules immediately
-# Type: STATUS  - Show scheduler status
-# Ctrl+C        - Graceful shutdown
-```
-
----
-
-## ⏰ Scheduling
-
-Configure automated schedules in `config.yaml`:
-
-```yaml
-scheduler:
-  enabled: true
-  timezone: "Europe/London"
-  run_on_startup: true
-  jobs:
-    azure_starters:
-      cron: "0 6 * * 1"    # Monday 6am
-      enabled: true
-    model_sync:
-      cron: "0 1 * * 0"    # Sunday 1am
-      enabled: true
-    user_match:
-      cron: "30 6 * * *"   # Daily 6:30am
-      enabled: true
-    snipe_to_jamf:
-      cron: "0 7 * * *"    # Daily 7am
-      enabled: true
-    leavers:
-      cron: "30 7 * * *"   # Daily 7:30am
-      enabled: true
-```
-
-### Cron Expression Reference
-
-```
-┌───────────── minute (0-59)
-│ ┌───────────── hour (0-23)
-│ │ ┌───────────── day of month (1-31)
-│ │ │ ┌───────────── month (1-12)
-│ │ │ │ ┌───────────── day of week (0-6, Sun=0)
-│ │ │ │ │
-* * * * *
-```
-
-| Expression | Description |
-|:-----------|:------------|
-| `0 6 * * *` | Daily at 6:00 AM |
-| `0 6 * * 1` | Monday at 6:00 AM |
-| `0 */4 * * *` | Every 4 hours |
-| `0 8 * * 1-5` | Weekdays at 8:00 AM |
-
----
-
-## 🔧 Troubleshooting
-
-<details>
-<summary>❌ <b>Jamf Pro Authentication Error</b></summary>
-
-```
-Error: Failed to obtain Jamf access token
-```
-
-**Solutions:**
-
-- Verify `client_id` and `client_secret` are correct
-- Check API client has not expired
-- Ensure API client has required privileges
-
-</details>
-
-<details>
-<summary>❌ <b>Snipe-IT 401 Unauthorized</b></summary>
-
-```
-Error: 401 Unauthorized
-```
-
-**Solutions:**
-
-- Verify API token is valid and not expired
-- Check token has full access permissions
-
-</details>
-
-<details>
-<summary>❌ <b>Azure AD Invalid Client Secret</b></summary>
-
-```
-Error: AADSTS7000215: Invalid client secret
-```
-
-**Solutions:**
-
-- Client secret may have expired
-- Create a new secret in Azure Portal
-
-</details>
-
-<details>
-<summary>❌ <b>Model Not Found</b></summary>
-
-```
-Error: Model not found for asset creation
-```
-
-**Solutions:**
-
-1. Run `python src/main.py model-sync --check-only`
-2. Run `python src/main.py model-sync` to create missing models
-3. Then run your original command
-
-</details>
-
-### Debug Mode
-
-Enable verbose logging:
-
-```bash
-python src/main.py leavers --dry-run --verbose
-```
-
----
-
-## 📁 Project Structure
+### Project Structure
 
 ```
 Jamf-SnipeIT-Suite/
-├── 📁 config/
-│   ├── config.yaml.example    # Template (safe to commit)
-│   └── config.yaml            # Your config (gitignored)
-├── 📁 src/
-│   ├── 📁 core/               # API clients
-│   │   ├── jamf_client.py
-│   │   ├── snipe_client.py
-│   │   ├── azure_client.py
-│   │   └── config.py
-│   ├── 📁 modules/            # Feature modules
-│   │   ├── leavers.py
-│   │   ├── azure_starters.py
-│   │   ├── snipe_to_jamf.py
-│   │   ├── user_match.py
-│   │   ├── model_sync.py
-│   │   ├── wakeup.py
-│   │   └── reconciliation.py
-│   ├── 📁 utils/              # Shared utilities
-│   ├── main.py                # CLI entry point
-│   ├── scheduler.py           # APScheduler
-│   └── docker_scheduler.py    # Docker scheduler
-├── 📁 logs/                   # Log files (gitignored)
-├── 📁 output/                 # Audit CSVs (gitignored)
-├── 🐳 Dockerfile
-├── 🐳 docker-compose.yml
-├── 📋 requirements.txt
-├── 📜 LICENSE
-├── 🔐 SECURITY.md
-├── 🤝 CONTRIBUTING.md
-└── 📖 README.md
+├── src/
+│   ├── main.py           # Entry point
+│   ├── jamf_client.py    # Jamf Pro API client
+│   ├── snipeit_client.py # Snipe-IT API client
+│   └── sync_engine.py    # Synchronization logic
+├── config/
+│   └── config.yaml       # Configuration file
+├── docker-compose.yml    # Docker composition
+├── Dockerfile            # Container definition
+└── requirements.txt      # Python dependencies
 ```
+
+---
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+<details>
+<summary>❌ API Authentication Failed</summary>
+
+```bash
+# Verify Jamf credentials
+curl -u "$JAMF_API_USER:$JAMF_API_PASSWORD" \
+  "https://your-jamf.jamfcloud.com/api/v1/auth/token"
+```
+</details>
+
+<details>
+<summary>❌ Snipe-IT Connection Error</summary>
+
+```bash
+# Verify Snipe-IT API key
+curl -H "Authorization: Bearer $SNIPEIT_API_KEY" \
+  "https://your-snipeit.example.com/api/v1/hardware"
+```
+</details>
+
+<details>
+<summary>❌ Docker Container Not Starting</summary>
+
+```bash
+# Check container logs
+docker-compose logs jamf-snipeit-sync
+
+# Verify config mount
+docker-compose exec jamf-snipeit-sync cat /app/config/config.yaml
+```
+</details>
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests and linting
-5. Submit a pull request
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'Add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ---
 
-## 🔐 Security
+## 🔒 Security
 
-See [SECURITY.md](SECURITY.md) for security policy and guidelines.
-
-**Important:** Never commit credentials or secrets!
+Please see [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ---
 
 ## 📄 License
 
-This project is licensed under the MIT License - see [LICENSE](LICENSE) for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
+
+<div align="center">
 
 ## 👤 Author
 
 **Davide Caputo**
 
-- 📧 Email: CaputoDav@gmail.com
+[![GitHub](https://img.shields.io/badge/GitHub-CaputoDavide93-181717?style=for-the-badge&logo=github)](https://github.com/CaputoDavide93)
+[![Email](https://img.shields.io/badge/Email-CaputoDav%40gmail.com-EA4335?style=for-the-badge&logo=gmail&logoColor=white)](mailto:CaputoDav@gmail.com)
 
 ---
 
-<p align="center">
-  Made with ❤️ for IT Asset Management
-</p>
+⭐ **If this tool helped you, please give it a star!** ⭐
+
+</div>
