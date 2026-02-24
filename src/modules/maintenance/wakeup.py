@@ -6,7 +6,8 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core import Config, JamfClient
+from core.config import Config
+from clients.jamf import JamfClient
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class WakeUpModule:
         if not gid:
             raise ValueError("Group ID required. Set --group-id or in config.")
         
-        logger.info(f"Fetching computers from group {gid}")
+        logger.debug(f"Fetching computers from group {gid}")
         
         computers = self.jamf.get_dynamic_group_by_id(gid)
         
@@ -71,7 +72,7 @@ class WakeUpModule:
             logger.warning(f"No computers in group {gid}")
             return {"total": 0, "successful": 0, "failed": 0}
         
-        logger.info(f"Found {len(computers)} computers in group")
+        logger.debug(f"Found {len(computers)} computers in group")
         
         # Extract computer IDs
         computer_ids = []
@@ -97,7 +98,7 @@ class WakeUpModule:
         Returns:
             Results dictionary
         """
-        logger.info(f"Looking up computer by serial: {serial_number}")
+        logger.debug(f"Looking up computer by serial: {serial_number}")
         
         computer = self.jamf.get_computer_by_serial(serial_number)
         
@@ -108,7 +109,7 @@ class WakeUpModule:
         if not comp_id:
             raise ValueError(f"Could not get ID for serial: {serial_number}")
         
-        logger.info(f"Found computer ID: {comp_id}")
+        logger.debug(f"Found computer ID: {comp_id}")
         
         return self._send_wake_commands([int(comp_id)], dry_run)
     
@@ -127,7 +128,7 @@ class WakeUpModule:
         Returns:
             Results dictionary
         """
-        logger.info(f"Looking up {len(serial_numbers)} computers by serial")
+        logger.debug(f"Looking up {len(serial_numbers)} computers by serial")
         
         computer_ids = []
         not_found = []
@@ -185,7 +186,7 @@ class WakeUpModule:
                 if line and not line.startswith("#"):
                     serial_numbers.append(line)
         
-        logger.info(f"Loaded {len(serial_numbers)} serial numbers from {file_path}")
+        logger.debug(f"Loaded {len(serial_numbers)} serial numbers from {file_path}")
         
         return self.wake_serials(serial_numbers, dry_run)
     

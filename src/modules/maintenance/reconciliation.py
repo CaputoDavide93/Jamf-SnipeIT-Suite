@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 
 from core.config import Config
-from core.jamf_client import JamfClient
-from core.snipe_client import SnipeITClient
+from clients.jamf import JamfClient
+from clients.snipeit import SnipeITClient
 
 
 @dataclass

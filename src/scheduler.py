@@ -23,7 +23,8 @@ from modules import (
     LeaversModule, 
     SnipeToJamfModule, 
     UserMatchModule, 
-    ModelSyncModule
+    ModelSyncModule,
+    CorrectionModule,
 )
 
 
@@ -107,15 +108,32 @@ class ScheduledTaskRunner:
         except Exception as e:
             self.logger.exception(f"Error running Model Sync: {e}")
     
+    def run_correction(self):
+        """Scheduled task: Run Self-Healing Correction module."""
+        self.logger.info("="*60)
+        self.logger.info("Starting scheduled task: Self-Healing Correction")
+        self.logger.info("="*60)
+        try:
+            module = CorrectionModule(self.config)
+            results = module.run(dry_run=self.dry_run)
+            self.logger.info(f"Correction completed: {results.get('total_assets_checked', 0)} checked, "
+                           f"{results.get('mismatches_found', 0)} mismatches, "
+                           f"{results.get('corrections_made', 0)} corrected, "
+                           f"{results.get('errors', 0)} errors")
+            module.close()
+        except Exception as e:
+            self.logger.exception(f"Error running Correction: {e}")
+    
     def run_all(self):
         """Scheduled task: Run all modules in sequence."""
         self.logger.info("="*60)
         self.logger.info("Starting scheduled task: Run All Modules")
         self.logger.info("="*60)
-        self.run_leavers()
-        self.run_snipe_to_jamf()
-        self.run_user_match()
         self.run_model_sync()
+        self.run_correction()
+        self.run_user_match()
+        self.run_snipe_to_jamf()
+        self.run_leavers()
         self.logger.info("All scheduled tasks completed")
 
 

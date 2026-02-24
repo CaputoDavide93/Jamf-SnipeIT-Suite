@@ -2,6 +2,9 @@
 # Jamf-SnipeIT Suite - Git Ignore
 # =============================================================================
 
+# Temporary/one-off scripts (local only)
+Temp/
+
 # ⚠️ SECURITY: Configuration files with secrets - NEVER commit these!
 config/config.yaml
 config.yaml

@@ -7,8 +7,11 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Set
 
-from core import Config, JamfClient, SnipeITClient
-from utils import rate_limit_delay
+from core.config import Config
+from clients.jamf import JamfClient
+from clients.snipeit import SnipeITClient
+from infra.progress import ProgressTracker
+from infra.helpers import rate_limit_delay
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +151,7 @@ class ModelSyncModule:
         Returns:
             Set of unique model names
         """
-        logger.info("Discovering unique models in Jamf Pro...")
+        logger.debug("Discovering unique models in Jamf Pro...")
         
         computers = self.jamf.get_all_computers_basic()
         
@@ -174,7 +177,7 @@ class ModelSyncModule:
             except Exception as e:
                 logger.debug(f"Could not get model for computer {comp_id}: {e}")
         
-        logger.info(f"Found {len(models)} unique models")
+        logger.debug(f"Found {len(models)} unique models")
         return models
     
     def provision_models(self, dry_run: bool = False) -> Dict[str, Any]:
@@ -216,10 +219,10 @@ class ModelSyncModule:
                 continue
             
             # Need to create model
-            logger.info(f"Model missing in Snipe-IT: {model_name}")
+            logger.debug(f"Model missing in Snipe-IT: {model_name}")
             
             if not self.auto_create_models:
-                logger.info("Auto-create disabled, skipping")
+                logger.debug("Auto-create disabled, skipping")
                 continue
             
             # Determine manufacturer from model name with improved detection
@@ -306,10 +309,13 @@ class ModelSyncModule:
         
         logger.info(f"Processing {len(computers)} computers for metadata sync")
         
+        progress = ProgressTracker("Model Sync", total=len(computers), log_every=50)
+        
         for i, comp in enumerate(computers, 1):
             serial = comp.get("serial_number", "").strip()
             
             if not serial:
+                progress.advance()
                 continue
             
             logger.debug(f"[{i}/{len(computers)}] Processing: {serial}")
@@ -327,9 +333,13 @@ class ModelSyncModule:
                 logger.error(f"Error processing {serial}: {e}")
                 results["errors"] += 1
             
+            progress.advance()
+            
             # Rate limiting
             if self.update_delay > 0:
                 rate_limit_delay(self.update_delay, "Model Sync", i, len(computers))
+        
+        progress.finish(extra=f"updated={results['updated']}, skipped={results['skipped']}, errors={results['errors']}")
         
         # Print summary
         self._print_summary(results, dry_run)
@@ -379,22 +389,12 @@ class ModelSyncModule:
         # Check if update needed
         current_model = snipe_asset.get("model")
         current_model_id = current_model.get("id") if isinstance(current_model, dict) else None
-        current_model_number = snipe_asset.get("model_number", "")
         
-        needs_update = False
-        update_data = {}
-        
-        if current_model_id != target_model_id:
-            update_data["model_id"] = target_model_id
-            needs_update = True
-        
-        if model_identifier and current_model_number != model_identifier:
-            update_data["model_number"] = model_identifier
-            needs_update = True
-        
-        if not needs_update:
+        if current_model_id == target_model_id:
             logger.debug(f"No changes needed for: {serial}")
             return False
+        
+        update_data = {"model_id": target_model_id}
         
         # Update asset
         if dry_run:
@@ -402,7 +402,7 @@ class ModelSyncModule:
             return True
         
         if self.snipe.update_asset(asset_id, update_data):
-            logger.info(f"Updated {serial}: {update_data}")
+            logger.debug(f"Updated {serial}: {update_data}")
             return True
         else:
             logger.error(f"Failed to update {serial}")

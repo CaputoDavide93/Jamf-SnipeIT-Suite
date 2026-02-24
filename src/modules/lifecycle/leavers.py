@@ -6,8 +6,13 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from core import Config, AzureClient, SnipeITClient
-from utils import AuditCSV, setup_logging, rate_limit_delay
+from core.config import Config
+from clients.azure import AzureClient
+from clients.snipeit import SnipeITClient
+from clients.slack import SlackClient
+from infra.audit_csv import AuditCSV
+from infra.progress import ProgressTracker
+from infra.helpers import setup_logging, rate_limit_delay
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,13 @@ class LeaversModule:
             max_retries=config.api.max_retries,
             retry_delay=config.api.retry_delay_seconds,
             rate_limit_wait=config.api.rate_limit_wait_seconds,
+        )
+        
+        # Slack notifications (optional)
+        self.slack = SlackClient(
+            bot_token=config.slack.bot_token,
+            channel_id=config.slack.channel_id,
+            enabled=config.slack.enabled and config.slack.notify_disabled_with_assets,
         )
     
     def run(
@@ -90,17 +102,17 @@ class LeaversModule:
         """Fetch users from Azure AD."""
         
         if group_type == "leavers" and self.config.azure.leavers_group_id:
-            logger.info(f"Fetching leavers group: {self.config.azure.leavers_group_id}")
+            logger.debug(f"Fetching leavers group: {self.config.azure.leavers_group_id}")
             return self.azure.get_group_members(self.config.azure.leavers_group_id)
         
         elif group_type == "disabled" and self.config.azure.disabled_group_id:
-            logger.info(f"Fetching disabled group: {self.config.azure.disabled_group_id}")
+            logger.debug(f"Fetching disabled group: {self.config.azure.disabled_group_id}")
             return self.azure.get_group_members(self.config.azure.disabled_group_id)
         
         else:
             # Fallback to filter-based query
             filter_clause = self.settings.get("user_filter", "accountEnabled eq false")
-            logger.info(f"Fetching users with filter: {filter_clause}")
+            logger.debug(f"Fetching users with filter: {filter_clause}")
             return self.azure.get_disabled_users(filter_clause)
     
     def _process_users(
@@ -123,10 +135,11 @@ class LeaversModule:
         
         total_batches = (len(users) + BATCH_SIZE - 1) // BATCH_SIZE
         logger.info(f"Processing {len(users)} users in {total_batches} batches")
+        progress = ProgressTracker("Leavers", total=len(users), log_every=25)
         
         for batch_num, batch_start in enumerate(range(0, len(users), BATCH_SIZE), 1):
             batch = users[batch_start:batch_start + BATCH_SIZE]
-            logger.info(f"Batch {batch_num}/{total_batches}: Processing {len(batch)} users")
+            logger.debug(f"Batch {batch_num}/{total_batches}: Processing {len(batch)} users")
             
             for user in batch:
                 try:
@@ -134,10 +147,13 @@ class LeaversModule:
                 except Exception as e:
                     logger.error(f"Error processing user {user.get('displayName')}: {e}")
                     results["errors"].append(str(e))
+                progress.advance()
             
             # Delay between batches
             if batch_start + BATCH_SIZE < len(users):
                 rate_limit_delay(2, "Leavers", batch_num, total_batches)
+        
+        progress.finish(extra=f"matched={results['matched_users']}, assets_updated={results['updated_assets']}")
         
         return results
     
@@ -162,16 +178,16 @@ class LeaversModule:
             logger.debug(f"Skipping user without email: {user.get('id')}")
             return
         
-        logger.info(f"Processing: {user.get('displayName')} ({email})")
+        logger.debug(f"Processing: {user.get('displayName')} ({email})")
         
         # Find user in Snipe-IT
         snipe_user = self.snipe.find_user_by_email(email)
         if not snipe_user:
-            logger.info(f"No Snipe-IT user found for: {email}")
+            logger.debug(f"No Snipe-IT user found for: {email}")
             return
         
         snipe_user_id = snipe_user.get("id")
-        logger.info(f"Found Snipe-IT user: id={snipe_user_id}")
+        logger.debug(f"Found Snipe-IT user: id={snipe_user_id}")
         
         # For disabled users, add [Disabled] prefix to name
         if group_type == "disabled" and not user.get("accountEnabled"):
@@ -180,11 +196,14 @@ class LeaversModule:
         # Find user's assets
         assets = self._get_user_assets(snipe_user_id, snipe_user)
         if not assets:
-            logger.info(f"No assets found for user: {email}")
+            logger.debug(f"No assets found for user: {email}")
             return
         
         results["matched_users"] += 1
-        logger.info(f"Found {len(assets)} assets for user")
+        logger.debug(f"Found {len(assets)} assets for user")
+        
+        # Track asset names for Slack notification
+        processed_asset_names = []
         
         # Update each asset to pending status
         for asset in assets:
@@ -195,15 +214,21 @@ class LeaversModule:
             if current_asset:
                 assigned_user_id = self.snipe.get_assigned_user_id(current_asset)
                 if assigned_user_id and assigned_user_id != snipe_user_id:
-                    logger.info(f"Asset {asset_id} now assigned to different user, skipping")
+                    logger.debug(f"Asset {asset_id} now assigned to different user, skipping")
                     continue
             
             # Check if already pending
-            current_status = asset.get("status_id")
-            if isinstance(current_status, dict):
-                current_status = current_status.get("id")
+            current_status_label = current_asset.get("status_label") if current_asset else asset.get("status_label")
+            current_status_id = None
+            if isinstance(current_status_label, dict):
+                current_status_id = current_status_label.get("id")
+            elif isinstance(current_status_label, (int, str)):
+                try:
+                    current_status_id = int(current_status_label)
+                except (ValueError, TypeError):
+                    pass
             
-            if current_status == pending_status_id:
+            if current_status_id == pending_status_id:
                 logger.debug(f"Asset {asset_id} already pending")
                 continue
             
@@ -211,42 +236,49 @@ class LeaversModule:
             asset_name = asset.get("name") or asset.get("asset_tag") or asset_id
             
             if dry_run:
-                logger.info(f"[DRY-RUN] Would mark asset {asset_name} as pending")
+                logger.info(f"[DRY-RUN] Would check-in and mark asset {asset_name} as pending")
                 results["updated_assets"] += 1
             else:
+                # Check in the asset first (release the assignment)
+                # so User Match won't see it as "still assigned to leaver"
+                assigned_user_id = self.snipe.get_assigned_user_id(current_asset) if current_asset else None
+                if assigned_user_id:
+                    checkin_ok = self.snipe.checkin_asset(
+                        asset_id,
+                        note=f"Auto check-in: user is in {group_type} group"
+                    )
+                    if not checkin_ok:
+                        logger.warning(f"Could not check-in asset {asset_name}, will still mark pending")
+                
+                # Now mark as pending
                 if self.snipe.update_asset_status(asset_id, pending_status_id):
-                    logger.info(f"Marked asset {asset_name} as pending")
+                    logger.info(f"Checked in and marked asset {asset_name} as pending")
                     results["updated_assets"] += 1
+                    processed_asset_names.append(str(asset_name))
                 else:
                     logger.error(f"Failed to update asset {asset_name}")
+        
+        # Log disabled users with assets (notification removed — users are
+        # disabled before they actually leave, so this is expected).
+        if processed_asset_names and not dry_run:
+            display_name = user.get("displayName", email)
+            logger.info(
+                f"Disabled user {display_name} ({email}): "
+                f"{len(processed_asset_names)} asset(s) marked pending"
+            )
     
     def _get_user_assets(
         self,
         user_id: int,
         snipe_user: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
-        """Get assets assigned to a user."""
+        """Get assets assigned to a user via the dedicated API endpoint."""
         
-        assets = []
+        # Use direct user→assets endpoint (much more reliable than name search)
+        assets = self.snipe.get_user_assets(user_id)
         
-        # Try searching by user name
-        user_name = snipe_user.get("name", "")
-        first_name = snipe_user.get("first_name", "")
-        last_name = snipe_user.get("last_name", "")
-        
-        search_terms = []
-        if user_name:
-            search_terms.append(user_name)
-        if first_name and last_name:
-            search_terms.append(f"{first_name} {last_name}")
-        
-        for term in search_terms[:2]:  # Limit searches
-            found = self.snipe.search_assets(search=term, status="Deployed", limit=50)
-            for asset in found:
-                assigned_to = asset.get("assigned_to")
-                if assigned_to and assigned_to.get("id") == user_id:
-                    if not any(a["id"] == asset["id"] for a in assets):
-                        assets.append(asset)
+        if not assets:
+            logger.debug(f"No assets found via /users/{user_id}/assets endpoint")
         
         return assets
     

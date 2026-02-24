@@ -216,6 +216,11 @@ class JamfClient:
                     time.sleep(delay)
                     continue
                 
+                # Handle 404 - Not Found (legitimate, do NOT retry)
+                if response.status_code == 404:
+                    logger.debug(f"404 Not Found for {url} — resource does not exist")
+                    return None
+                
                 # Handle 409 - Conflict (resource locked, concurrent modification)
                 # This is common in Jamf Classic API when records are being updated elsewhere
                 # or when the device is actively checking in
@@ -247,7 +252,7 @@ class JamfClient:
                 logger.error(f"Request error ({url}): {e}")
                 if attempt < self.max_retries:
                     delay = self.retry_delay * (2 ** (attempt - 1))
-                    logger.info(f"Retrying in {delay}s...")
+                    logger.debug(f"Retrying in {delay}s...")
                     time.sleep(delay)
                 else:
                     logger.error(f"Exhausted retries for {url}")
@@ -264,7 +269,7 @@ class JamfClient:
         Get all computers with basic info (ID, serial number).
         Uses Classic API subset=basic.
         """
-        logger.info("Fetching all computers (basic subset)...")
+        logger.debug("Fetching all computers (basic subset)...")
         
         response = self._request("GET", "/JSSResource/computers/subset/basic")
         if not response:
@@ -280,7 +285,7 @@ class JamfClient:
             if jid and serial:
                 results.append({"id": jid, "serial_number": serial})
         
-        logger.info(f"Retrieved {len(results)} computers")
+        logger.debug(f"Retrieved {len(results)} computers")
         return results
     
     def get_computer_by_id(
@@ -357,12 +362,12 @@ class JamfClient:
         Returns:
             List of computer dictionaries
         """
-        logger.info(f"Fetching computers from smart group: {group_name}")
+        logger.debug(f"Fetching computers from smart group: {group_name}")
         
         data = self.get_smart_group(group_name)
         computers = data.get("computer_group", {}).get("computers", []) or []
         
-        logger.info(f"Found {len(computers)} computers in smart group")
+        logger.debug(f"Found {len(computers)} computers in smart group")
         return computers
     
     def get_dynamic_group_by_id(self, group_id: str) -> List[Dict[str, Any]]:
@@ -375,7 +380,7 @@ class JamfClient:
         Returns:
             List of computer dictionaries with extended details
         """
-        logger.info(f"Fetching dynamic group: {group_id}")
+        logger.debug(f"Fetching dynamic group: {group_id}")
         
         response = self._request("GET", f"/JSSResource/computergroups/id/{group_id}")
         if not response:
@@ -384,7 +389,7 @@ class JamfClient:
         data = response.json()
         computers = data.get("computer_group", {}).get("computers", [])
         
-        logger.info(f"Found {len(computers)} computers in dynamic group")
+        logger.debug(f"Found {len(computers)} computers in dynamic group")
         return computers
     
     # =========================================================================
@@ -449,7 +454,7 @@ class JamfClient:
         response = self._request("PUT", endpoint, xml_data=xml.encode("utf-8"))
         
         if response and response.status_code in (200, 201):
-            logger.info(f"Updated computer {computer_id} location info")
+            logger.debug(f"Updated computer {computer_id} location info")
             return True
         
         logger.error(f"Failed to update computer {computer_id}")
@@ -508,7 +513,7 @@ class JamfClient:
         response = self._request("PUT", endpoint, xml_data=xml.encode("utf-8"))
         
         if response and response.status_code in (200, 201):
-            logger.info(f"Updated computer {computer_id} with EA {ea_name}={ea_value}")
+            logger.debug(f"Updated computer {computer_id} with EA {ea_name}={ea_value}")
             return True
         
         logger.error(f"Failed to update computer {computer_id}")
@@ -528,14 +533,14 @@ class JamfClient:
         Returns:
             Response data with commandUuid, or None on failure
         """
-        logger.info(f"Sending redeploy command to computer {computer_id}")
+        logger.debug(f"Sending redeploy command to computer {computer_id}")
         
         endpoint = f"/api/v1/jamf-management-framework/redeploy/{computer_id}"
         response = self._request("POST", endpoint)
         
         if response:
             result = response.json()
-            logger.info(f"Redeploy command queued. UUID: {result.get('commandUuid')}")
+            logger.debug(f"Redeploy command queued. UUID: {result.get('commandUuid')}")
             return result
         
         logger.error(f"Failed to send redeploy command to computer {computer_id}")
@@ -634,3 +639,15 @@ class JamfClient:
     def close(self) -> None:
         """Close the session."""
         self.session.close()
+
+    def ping(self) -> bool:
+        """Quick connectivity check — hits the Jamf Pro version endpoint."""
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/api/v1/jamf-pro-version",
+                headers=self._get_headers(),
+                timeout=10,
+            )
+            return resp.status_code == 200
+        except Exception:
+            return False

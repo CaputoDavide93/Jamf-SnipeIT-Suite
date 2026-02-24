@@ -2,12 +2,14 @@
 """
 Jamf-SnipeIT Suite - Docker Scheduler
 Main entry point for Docker container with:
-- Scheduler enabled by default
-- Run all modules on startup
-- "NOW" command for on-demand execution
-- Next run time display in logs
+- Pre-flight API connectivity check
+- RunContext shared data bus across modules
+- Module execution metrics & Slack notifications
+- Scheduler with on-demand "NOW" menu
+- Config hot-reload (watches file mtime)
 """
 import argparse
+import json
 import sys
 import os
 import logging
@@ -16,6 +18,7 @@ import threading
 import time
 import select
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Dict, List
 
 try:
@@ -30,20 +33,38 @@ except ImportError:
     EVENT_JOB_ERROR = None  # type: ignore
     APSCHEDULER_AVAILABLE = False
 
-from core.config import get_config, Config
-from modules import (
-    LeaversModule,
-    SnipeToJamfModule,
+from core.config import get_config, reload_config, Config
+from core.run_context import RunContext
+from core.state import SyncState, RetryQueue
+from clients.slack import SlackClient
+from infra.health import start_health_server, get_health_server
+from modules.sync import (
     UserMatchModule,
+    SnipeToJamfModule,
     ModelSyncModule,
+    CorrectionModule,
+    PeripheralsSyncModule,
+)
+from modules.lifecycle import (
+    AzureStartersModule,
+    LeaversModule,
+    UserEnrichmentModule,
+)
+from modules.maintenance import (
     ReconciliationModule,
+    CleanupModule,
+    UsernameStandardizer,
 )
 
 
 # Global state
 scheduler: Optional[BackgroundScheduler] = None
 config: Optional[Config] = None
+slack: Optional[SlackClient] = None
+sync_state: Optional[SyncState] = None
+retry_queue: Optional[RetryQueue] = None
 running = True
+_config_mtime: float = 0.0  # for hot-reload
 logger = logging.getLogger('jamf-snipeit-docker')
 
 
@@ -79,24 +100,135 @@ def print_banner():
     print(banner)
 
 
-def run_module_safe(name: str, runner_fn, dry_run: bool = False) -> Dict:
+def pre_flight_check() -> bool:
+    """
+    Verify API connectivity before running modules.
+    Returns True if all critical APIs are reachable.
+    """
+    from clients.snipeit import SnipeITClient
+    from clients.jamf import JamfClient
+    from clients.azure import AzureClient
+
+    logger.info("┌──────────────────────────────────────────────────────────┐")
+    logger.info("│  🔍  Pre-flight API connectivity check                   │")
+    logger.info("└──────────────────────────────────────────────────────────┘")
+    all_ok = True
+
+    def _check_snipe():
+        c = SnipeITClient(
+            base_url=config.snipeit.base_url,
+            api_token=config.snipeit.api_token,
+            timeout=config.api.timeout_seconds,
+            max_retries=2,
+            retry_delay=2,
+        )
+        return c.ping()
+
+    def _check_jamf():
+        c = JamfClient(
+            base_url=config.jamf.base_url,
+            username=config.jamf.username,
+            password=config.jamf.password,
+            client_id=config.jamf.client_id,
+            client_secret=config.jamf.client_secret,
+            timeout=config.api.timeout_seconds,
+            max_retries=2,
+            retry_delay=2,
+        )
+        return c.ping()
+
+    def _check_azure():
+        c = AzureClient(
+            tenant_id=config.azure.tenant_id,
+            client_id=config.azure.client_id,
+            client_secret=config.azure.client_secret,
+            timeout=config.api.timeout_seconds,
+            max_retries=2,
+            retry_delay=2,
+        )
+        return c.ping()
+
+    checks = [
+        ("Snipe-IT", _check_snipe),
+        ("Jamf Pro", _check_jamf),
+        ("Azure AD", _check_azure),
+    ]
+
+    for name, check_fn in checks:
+        try:
+            ok = check_fn()
+            if ok:
+                logger.info(f"   ✅ {name}: reachable")
+            else:
+                logger.warning(f"   ⚠️  {name}: returned unexpected response")
+                all_ok = False
+        except Exception as e:
+            logger.error(f"   ❌ {name}: unreachable — {e}")
+            all_ok = False
+            if slack:
+                slack.notify_error(name, str(e))
+
+    if all_ok:
+        logger.info("   All APIs reachable ✓")
+    else:
+        logger.warning("   Some APIs unreachable — modules may fail")
+
+    return all_ok
+
+
+def check_config_reload():
+    """Hot-reload config if the file has been modified."""
+    global config, _config_mtime
+    try:
+        cfg_path = Path(config._config_path) if hasattr(config, '_config_path') else Path('/app/config/config.yaml')
+        if cfg_path.exists():
+            mtime = cfg_path.stat().st_mtime
+            if mtime > _config_mtime and _config_mtime > 0:
+                logger.info("🔄 Config file changed — reloading...")
+                new_cfg = reload_config()
+                if new_cfg:
+                    config = new_cfg
+                    logger.info("✅ Configuration reloaded")
+                else:
+                    logger.warning("⚠️  Config reload returned None, keeping old config")
+            _config_mtime = mtime
+    except Exception as e:
+        logger.debug(f"Config reload check failed: {e}")
+
+
+def run_module_safe(name: str, runner_fn, dry_run: bool = False,
+                    ctx: Optional[RunContext] = None) -> Dict:
     """
     Run a module safely, catching exceptions.
-    
+    Optionally tracks metrics via RunContext.
+
     Returns:
         Dict with 'success', 'error', and 'results' keys
     """
-    logger.info(f"{'='*60}")
-    logger.info(f"Starting module: {name}")
-    logger.info(f"{'='*60}")
-    
+    logger.info(f"")
+    logger.info(f"┌{'─'*58}┐")
+    logger.info(f"│  ▶  {name:<52} │")
+    logger.info(f"└{'─'*58}┘")
+
+    if ctx:
+        ctx.start_module(name)
+
     try:
         results = runner_fn(dry_run=dry_run)
-        logger.info(f"✅ {name} completed successfully")
+        logger.info(f"  ✅  {name} completed")
+        if ctx:
+            ctx.stop_module(name, results=results if isinstance(results, dict) else None)
+        if sync_state:
+            sync_state.set_last_run(name)
         return {'success': True, 'error': None, 'results': results}
     except Exception as e:
-        logger.error(f"❌ {name} failed: {e}")
+        logger.error(f"  ❌  {name} failed: {e}")
         logger.exception("Full traceback:")
+        if ctx:
+            ctx.record_error(name, e)
+            ctx.stop_module(name)
+        if slack:
+            slack.notify_error(name, str(e))
         return {'success': False, 'error': str(e), 'results': None}
 
 
@@ -136,6 +268,24 @@ def run_model_sync(dry_run: bool = False) -> Dict:
         module.close()
 
 
+def run_correction(dry_run: bool = False) -> Dict:
+    """Run Self-Healing Correction module."""
+    module = CorrectionModule(config)
+    try:
+        return module.run(dry_run=dry_run)
+    finally:
+        module.close()
+
+
+def run_azure_starters(dry_run: bool = False) -> Dict:
+    """Run Azure Starters module — creates new Snipe-IT users from Azure AD."""
+    module = AzureStartersModule(config, dry_run=dry_run)
+    try:
+        return module.run(dry_run=dry_run)
+    finally:
+        module.close()
+
+
 def run_reconciliation(dry_run: bool = False) -> Dict:
     """Run Reconciliation module."""
     module = ReconciliationModule(config, dry_run=dry_run)
@@ -147,54 +297,116 @@ def run_reconciliation(dry_run: bool = False) -> Dict:
             module.close()
 
 
+def run_cleanup(dry_run: bool = False) -> Dict:
+    """Run Cleanup module — detect and merge duplicate users."""
+    module = CleanupModule(config)
+    try:
+        return module.run(dry_run=dry_run)
+    finally:
+        module.close()
+
+
+def run_peripherals_sync(dry_run: bool = False) -> Dict:
+    """Run Peripherals Sync — HiBob equipment → Snipe-IT accessories."""
+    module = PeripheralsSyncModule(config, dry_run=dry_run)
+    try:
+        return module.run(dry_run=dry_run)
+    finally:
+        module.close()
+
+
+def run_username_standardize(dry_run: bool = False) -> Dict:
+    """Run Username Standardization — strip @domain from usernames."""
+    module = UsernameStandardizer(config)
+    try:
+        return module.run(dry_run=dry_run)
+    finally:
+        module.close()
+
+
+def run_user_enrichment(dry_run: bool = False) -> Dict:
+    """Run User Enrichment — push Azure AD fields to Snipe-IT user records."""
+    module = UserEnrichmentModule(config)
+    try:
+        return module.run(dry_run=dry_run)
+    finally:
+        module.close()
+
+
 def run_all_modules_startup(dry_run: bool = False):
     """
-    Run all modules on startup.
+    Run all modules on startup with RunContext for shared data and metrics.
     Continue even if one fails, report results at end.
     """
     logger.info("")
-    logger.info("🚀 " + "="*58)
+    logger.info("╔" + "═"*58 + "╗")
     if dry_run:
-        logger.info("   STARTUP: Running all modules (DRY RUN)")
+        logger.info("║  🚀  STARTUP — Running all modules (DRY RUN)" + " "*12 + "║")
     else:
-        logger.info("   STARTUP: Running all modules sequentially")
-    logger.info("🚀 " + "="*58)
+        logger.info("║  🚀  STARTUP — Running all modules" + " "*22 + "║")
+    logger.info("╚" + "═"*58 + "╝")
     logger.info("")
-    
+
+    # Pre-flight connectivity check
+    pre_flight_check()
+
+    ctx = RunContext()
+
     modules = [
-        ("Leavers", run_leavers),
-        ("Snipe-to-Jamf", run_snipe_to_jamf),
-        ("User Match", run_user_match),
+        ("Azure Starters", run_azure_starters),
+        ("User Enrichment", run_user_enrichment),
         ("Model Sync", run_model_sync),
+        ("Correction", run_correction),
+        ("User Match", run_user_match),
+        ("Snipe-to-Jamf", run_snipe_to_jamf),
+        ("Leavers", run_leavers),
+        ("Peripherals Sync", run_peripherals_sync),
     ]
-    
+
     results = {}
     for name, runner in modules:
-        results[name] = run_module_safe(name, runner, dry_run=dry_run)
+        results[name] = run_module_safe(name, runner, dry_run=dry_run, ctx=ctx)
         time.sleep(2)  # Small delay between modules
-    
+
     # Print summary
     logger.info("")
-    logger.info("📊 " + "="*58)
-    logger.info("   STARTUP COMPLETE - SUMMARY")
-    logger.info("📊 " + "="*58)
-    
+    logger.info("╔" + "═"*58 + "╗")
+    logger.info("║  📊  RUN COMPLETE — SUMMARY" + " "*29 + "║")
+    logger.info("╠" + "═"*58 + "╣")
+
     success_count = 0
     fail_count = 0
-    
+
     for name, result in results.items():
         if result['success']:
-            logger.info(f"   ✅ {name}: SUCCESS")
+            logger.info(f"║  ✅  {name:<52}║")
             success_count += 1
         else:
-            logger.error(f"   ❌ {name}: FAILED - {result['error']}")
+            logger.error(f"║  ❌  {name:<40} FAILED  ║")
             fail_count += 1
-    
+
+    logger.info("╠" + "═"*58 + "╣")
+    logger.info(f"║  Result: {success_count} succeeded, {fail_count} failed" + " "*max(0, 58 - 12 - len(str(success_count)) - len(str(fail_count)) - 21) + "║")
+
+    # Log module execution metrics
+    summary = ctx.summary()
+    if summary and summary.get("modules"):
+        logger.info("╠" + "═"*58 + "╣")
+        logger.info("║  ⏱  Module Timings" + " "*38 + "║")
+        logger.info("╟" + "─"*58 + "╢")
+        for mod_name, mod_data in summary["modules"].items():
+            dur = mod_data.get("duration_s", 0)
+            processed = mod_data.get("processed", 0)
+            line = f"{mod_name}: {dur:.0f}s ({processed} items)"
+            logger.info(f"║  {line:<56}║")
+
+    logger.info("╚" + "═"*58 + "╝")
     logger.info("")
-    logger.info(f"   Total: {success_count} succeeded, {fail_count} failed")
-    logger.info("📊 " + "="*58)
-    logger.info("")
-    
+
+    # Slack run summary
+    if slack and config.slack.notify_module_summary:
+        slack.notify_run_summary(summary)
+
     return results
 
 
@@ -253,18 +465,27 @@ def on_demand_menu():
     print("  ON-DEMAND EXECUTION MENU")
     print("="*60)
     print("\n  Select a module to run:")
-    print("  1. Leavers - Mark assets of disabled Azure users")
-    print("  2. Snipe-to-Jamf - Sync user info from Snipe-IT to Jamf")
-    print("  3. User Match - Match Jamf computers to Snipe-IT users")
-    print("  4. Model Sync - Sync hardware models between platforms")
-    print("  5. Reconciliation - Find inventory discrepancies")
-    print("  6. Run ALL modules")
-    print("  7. Run ALL (DRY RUN - no changes)")
-    print("  0. Cancel - Return to scheduler")
+    print("  1.  Leavers - Mark assets of disabled Azure users")
+    print("  2.  Snipe-to-Jamf - Sync user info from Snipe-IT to Jamf")
+    print("  3.  User Match - Match Jamf computers to Snipe-IT users")
+    print("  4.  Model Sync - Sync hardware models between platforms")
+    print("  5.  Reconciliation - Find inventory discrepancies")
+    print("  6.  Run ALL modules")
+    print("  7.  Run ALL (DRY RUN - no changes)")
+    print("  8.  Self-Healing Correction - Detect & fix wrong assignments")
+    print("  9.  Azure Starters - Create new Snipe-IT users from Azure AD")
+    print("  10. Cleanup - Merge duplicate users & remove junk accounts")
+    print("  11. Cleanup (DRY RUN)")
+    print("  12. Peripherals Sync - HiBob equipment → Snipe-IT accessories")
+    print("  13. Username Standardize - Strip @domain from all usernames")
+    print("  14. Username Standardize (DRY RUN)")
+    print("  15. User Enrichment - Push Azure AD fields to Snipe-IT users")
+    print("  16. User Enrichment (DRY RUN)")
+    print("  0.  Cancel - Return to scheduler")
     print("="*60)
     
     try:
-        choice = input("\n  Enter your choice (0-7): ").strip()
+        choice = input("\n  Enter your choice (0-16): ").strip()
     except EOFError:
         return
     
@@ -288,14 +509,25 @@ def on_demand_menu():
         run_all_modules_startup()
     elif choice == '7':
         print("\n  🧪 DRY RUN MODE - No changes will be made\n")
-        modules = [
-            ("Leavers", run_leavers),
-            ("Snipe-to-Jamf", run_snipe_to_jamf),
-            ("User Match", run_user_match),
-            ("Model Sync", run_model_sync),
-        ]
-        for name, runner in modules:
-            run_module_safe(name, runner, dry_run=True)
+        run_all_modules_startup(dry_run=True)
+    elif choice == '8':
+        run_module_safe("Self-Healing Correction", run_correction, dry_run)
+    elif choice == '9':
+        run_module_safe("Azure Starters", run_azure_starters, dry_run)
+    elif choice == '10':
+        run_module_safe("Cleanup", run_cleanup, dry_run)
+    elif choice == '11':
+        run_module_safe("Cleanup (DRY RUN)", run_cleanup, dry_run=True)
+    elif choice == '12':
+        run_module_safe("Peripherals Sync", run_peripherals_sync, dry_run)
+    elif choice == '13':
+        run_module_safe("Username Standardize", run_username_standardize, dry_run)
+    elif choice == '14':
+        run_module_safe("Username Standardize (DRY)", run_username_standardize, dry_run=True)
+    elif choice == '15':
+        run_module_safe("User Enrichment", run_user_enrichment, dry_run)
+    elif choice == '16':
+        run_module_safe("User Enrichment (DRY)", run_user_enrichment, dry_run=True)
     else:
         print("  Invalid choice.")
     
@@ -397,6 +629,61 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
         )
         logger.info(f"  ✓ Model Sync scheduled: {cron}")
     
+    # Add Azure Starters job
+    if jobs_config.get('azure_starters', {}).get('enabled', False):
+        cron = jobs_config['azure_starters'].get('cron', '0 6 * * 1')
+        scheduler.add_job(
+            lambda: run_module_safe("Azure Starters", run_azure_starters),
+            CronTrigger.from_crontab(cron),
+            id='azure_starters',
+            name='Azure Starters Module'
+        )
+        logger.info(f"  ✓ Azure Starters scheduled: {cron}")
+    
+    # Add Correction job
+    if jobs_config.get('correction', {}).get('enabled', False):
+        cron = jobs_config['correction'].get('cron', '0 8 * * *')
+        scheduler.add_job(
+            lambda: run_module_safe("Correction", run_correction),
+            CronTrigger.from_crontab(cron),
+            id='correction',
+            name='Self-Healing Correction'
+        )
+        logger.info(f"  ✓ Correction scheduled: {cron}")
+
+    # Add Cleanup / Duplicate Detection job
+    if jobs_config.get('cleanup', {}).get('enabled', False):
+        cron = jobs_config['cleanup'].get('cron', '0 3 * * 0')
+        scheduler.add_job(
+            lambda: run_module_safe("Cleanup", run_cleanup),
+            CronTrigger.from_crontab(cron),
+            id='cleanup',
+            name='Cleanup & Duplicate Detection'
+        )
+        logger.info(f"  ✓ Cleanup scheduled: {cron}")
+
+    # Add User Enrichment job
+    if jobs_config.get('user_enrichment', {}).get('enabled', False):
+        cron = jobs_config['user_enrichment'].get('cron', '30 6 * * 1')
+        scheduler.add_job(
+            lambda: run_module_safe("User Enrichment", run_user_enrichment),
+            CronTrigger.from_crontab(cron),
+            id='user_enrichment',
+            name='User Enrichment Module'
+        )
+        logger.info(f"  ✓ User Enrichment scheduled: {cron}")
+
+    # Add Peripherals Sync job (HiBob → Snipe-IT accessories)
+    if jobs_config.get('peripherals_sync', {}).get('enabled', False):
+        cron = jobs_config['peripherals_sync'].get('cron', '0 8 * * 1')
+        scheduler.add_job(
+            lambda: run_module_safe("Peripherals Sync", run_peripherals_sync),
+            CronTrigger.from_crontab(cron),
+            id='peripherals_sync',
+            name='Peripherals Sync (HiBob)'
+        )
+        logger.info(f"  ✓ Peripherals Sync scheduled: {cron}")
+    
     return scheduler
 
 
@@ -411,7 +698,7 @@ def signal_handler(signum, frame):
 
 
 def main():
-    global config, running
+    global config, running, slack, sync_state, retry_queue, _config_mtime
     
     parser = argparse.ArgumentParser(description='Jamf-SnipeIT Suite - Docker Scheduler')
     parser.add_argument('--config', '-c', default='/app/config/config.yaml',
@@ -446,6 +733,34 @@ def main():
     except Exception as e:
         print(f"❌ Failed to load configuration: {e}")
         return 1
+
+    # Track config file mtime for hot-reload
+    cfg_path = Path(args.config)
+    if cfg_path.exists():
+        _config_mtime = cfg_path.stat().st_mtime
+
+    # Initialise Slack client
+    if hasattr(config, 'slack') and config.slack and config.slack.enabled:
+        slack = SlackClient(
+            bot_token=config.slack.bot_token,
+            channel_id=config.slack.channel_id,
+            enabled=True,
+        )
+        logger.info("✅ Slack notifications enabled")
+    else:
+        logger.info("ℹ️  Slack notifications disabled")
+
+    # Initialise persistent state helpers
+    sync_state = SyncState()
+    retry_queue = RetryQueue()
+    logger.info("✅ SyncState & RetryQueue initialised")
+
+    # Start health server
+    try:
+        health_server = start_health_server(port=8080)
+        logger.info("✅ Health server started on :8080")
+    except Exception as e:
+        logger.warning(f"⚠️  Health server failed to start: {e}")
     
     # Check if scheduler is enabled in config
     scheduler_cfg = config.scheduler if hasattr(config, 'scheduler') else {}
@@ -500,14 +815,17 @@ def main():
     input_thread = threading.Thread(target=input_listener, daemon=True)
     input_thread.start()
     
-    # Main loop - print status periodically
+    # Main loop - print status periodically and check for config changes
     last_status_print = time.time()
     status_interval = 3600  # Print status every hour
     
     try:
         while running:
             time.sleep(10)
-            
+
+            # Hot-reload config if file changed
+            check_config_reload()
+
             # Periodically print next run times
             if time.time() - last_status_print > status_interval:
                 print_next_run_times()

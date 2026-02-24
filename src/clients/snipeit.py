@@ -105,7 +105,12 @@ class SnipeITClient:
                         logger.error("Rate limit exceeded after max retries")
                         return None
                 
-                # Handle other errors
+                # Handle 404 - Not Found (legitimate, do NOT retry)
+                if response.status_code == 404:
+                    logger.debug(f"404 Not Found for {url} — resource does not exist")
+                    return None
+                
+                # Handle other errors (retry-able)
                 if response.status_code >= 400:
                     logger.error(f"API error {response.status_code}: {response.text[:200]}")
                     if attempt < self.max_retries:
@@ -120,7 +125,7 @@ class SnipeITClient:
                 logger.error(f"Request exception ({url}): {e}")
                 if attempt < self.max_retries:
                     delay = self.retry_delay * (2 ** (attempt - 1))
-                    logger.info(f"Retrying in {delay}s...")
+                    logger.debug(f"Retrying in {delay}s...")
                     time.sleep(delay)
                 else:
                     return None
@@ -141,7 +146,7 @@ class SnipeITClient:
         Returns:
             List of all user dictionaries
         """
-        logger.info("Fetching all users from Snipe-IT...")
+        logger.debug("Fetching all users from Snipe-IT...")
         
         all_users: List[Dict[str, Any]] = []
         offset = 0
@@ -167,7 +172,7 @@ class SnipeITClient:
             if len(all_users) >= total or len(users) < limit:
                 break
         
-        logger.info(f"Retrieved {len(all_users)} users total")
+        logger.debug(f"Retrieved {len(all_users)} users total")
         return all_users
 
     def find_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
@@ -199,7 +204,7 @@ class SnipeITClient:
     def find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         """
         Find a user by username (searches username field and email prefix).
-        Tries multiple search variations since Snipe-IT search is literal.
+        Uses strict normalized matching to avoid false positives.
         
         Args:
             username: Username to search (e.g., 'lewistowart' or 'lewis.towart')
@@ -207,55 +212,37 @@ class SnipeITClient:
         Returns:
             User dictionary or None
         """
-        if not username:
+        if not username or len(username) < 3:
             return None
         
         # Normalize the search username for comparison
         search_norm = username.lower().strip().replace(".", "").replace("_", "").replace("-", "")
         
-        # Try multiple search terms - Snipe-IT search is literal
-        search_terms = [username]
+        # Try searching with the username directly
+        response = self._request("GET", "/users", params={"search": username, "limit": 50})
+        if not response:
+            return None
         
-        # If username has no dots, try adding common patterns (firstname.lastname)
-        if "." not in username and len(username) > 3:
-            # Try to split camelCase or find word boundaries
-            # E.g., "lewistowart" -> try "lewis", "towart"
-            search_terms.append(username[:len(username)//2])  # First half
-            search_terms.append(username[len(username)//2:])  # Second half
+        data = response.json()
         
-        for search_term in search_terms:
-            if len(search_term) < 3:
-                continue
-                
-            response = self._request("GET", "/users", params={"search": search_term, "limit": 50})
-            if not response:
-                continue
+        for user in data.get("rows", []):
+            # Check username match (normalized)
+            snipe_username = (user.get("username") or "").lower()
+            snipe_username_norm = snipe_username.replace(".", "").replace("_", "").replace("-", "")
             
-            data = response.json()
+            # Remove domain from username if present
+            if "@" in snipe_username_norm:
+                snipe_username_norm = snipe_username_norm.split("@")[0]
             
-            for user in data.get("rows", []):
-                # Check username match
-                snipe_username = (user.get("username") or "").lower()
-                snipe_username_norm = snipe_username.replace(".", "").replace("_", "").replace("-", "").replace("@", "")
-                
-                # Remove domain from username if present
-                if "@" in snipe_username_norm:
-                    snipe_username_norm = snipe_username_norm.split("@")[0]
-                
-                # Check email prefix match
-                snipe_email = (user.get("email") or "").lower()
-                snipe_email_prefix = snipe_email.split("@")[0] if "@" in snipe_email else ""
-                snipe_email_norm = snipe_email_prefix.replace(".", "").replace("_", "").replace("-", "")
-                
-                # Match if normalized username matches
-                if (search_norm == snipe_username_norm or 
-                    search_norm == snipe_email_norm or
-                    (len(search_norm) >= 6 and search_norm in snipe_username_norm) or
-                    (len(snipe_username_norm) >= 6 and snipe_username_norm in search_norm) or
-                    (len(search_norm) >= 6 and search_norm in snipe_email_norm) or
-                    (len(snipe_email_norm) >= 6 and snipe_email_norm in search_norm)):
-                    logger.debug(f"Found Snipe user by username {username}: id={user.get('id')}, name={user.get('name')}")
-                    return user
+            # Check email prefix match (normalized)
+            snipe_email = (user.get("email") or "").lower()
+            snipe_email_prefix = snipe_email.split("@")[0] if "@" in snipe_email else ""
+            snipe_email_norm = snipe_email_prefix.replace(".", "").replace("_", "").replace("-", "")
+            
+            # STRICT match: require exact normalized match (not substring!)
+            if search_norm == snipe_username_norm or search_norm == snipe_email_norm:
+                logger.debug(f"Found Snipe user by username {username}: id={user.get('id')}, name={user.get('name')}")
+                return user
         
         logger.debug(f"No Snipe user found for username: {username}")
         return None
@@ -275,6 +262,28 @@ class SnipeITClient:
             return None
         
         return response.json()
+    
+    def get_user_assets(self, user_id: int) -> List[Dict[str, Any]]:
+        """
+        Get assets assigned to a specific user via the dedicated API endpoint.
+        Much more reliable than searching by name.
+        
+        Args:
+            user_id: Snipe-IT user ID
+        
+        Returns:
+            List of asset dictionaries assigned to this user
+        """
+        response = self._request("GET", f"/users/{user_id}/assets")
+        if not response:
+            return []
+        
+        data = response.json()
+        rows = data.get("rows", [])
+        total = data.get("total", 0)
+        
+        logger.debug(f"Found {len(rows)}/{total} assets for user {user_id}")
+        return rows
     
     def update_user(self, user_id: int, data: Dict[str, Any]) -> bool:
         """
@@ -314,9 +323,22 @@ class SnipeITClient:
             result = response.json()
             if result.get("status") == "success":
                 return result.get("payload")
-            elif result.get("payload"):
-                return result.get("payload")
+            # Status is not "success" — log the error and return None
+            logger.warning(f"create_user returned non-success status: {result.get('status')} — {result.get('messages', '')}")
         return None
+
+    def delete_user(self, user_id: int) -> bool:
+        """
+        Delete a user from Snipe-IT.
+
+        Args:
+            user_id: Snipe-IT user ID
+
+        Returns:
+            True if successfully deleted
+        """
+        response = self._request("DELETE", f"/users/{user_id}")
+        return response is not None and response.status_code in (200, 204)
     
     # =========================================================================
     # Asset/Hardware Operations
@@ -408,7 +430,7 @@ class SnipeITClient:
             if offset >= total or not rows:
                 break
         
-        logger.info(f"Retrieved {len(all_assets)} total assets from Snipe-IT")
+        logger.debug(f"Retrieved {len(all_assets)} total assets from Snipe-IT")
         return all_assets
     
     def get_assets_by_serial_map(self) -> Dict[str, Dict[str, Any]]:
@@ -426,7 +448,7 @@ class SnipeITClient:
             if serial:
                 serial_map[serial] = asset
         
-        logger.info(f"Built serial map with {len(serial_map)} entries")
+        logger.debug(f"Built serial map with {len(serial_map)} entries")
         return serial_map
     
     def search_assets(
@@ -488,15 +510,19 @@ class SnipeITClient:
             "serial": serial,
             "model_id": model_id,
             "status_id": status_id,
-            "asset_tag": asset_tag or serial,
         }
+        
+        # Only set asset_tag if explicitly provided.
+        # Otherwise let Snipe-IT auto-generate (e.g. CF-XXXXX).
+        if asset_tag:
+            payload["asset_tag"] = asset_tag
         
         if company_id > 0:
             payload["company_id"] = company_id
         if location_id > 0:
             payload["rtd_location_id"] = location_id
         
-        logger.info(f"Creating asset: serial={serial}, model_id={model_id}")
+        logger.debug(f"Creating asset: serial={serial}, model_id={model_id}")
         
         response = self._request("POST", "/hardware", json_data=payload)
         if not response or response.status_code not in (200, 201):
@@ -505,7 +531,7 @@ class SnipeITClient:
         
         result = response.json()
         asset = self._normalize_asset(result) or result
-        logger.info(f"Created asset: id={asset.get('id')}, serial={serial}")
+        logger.debug(f"Created asset: id={asset.get('id')}, serial={serial}")
         return asset
     
     def update_asset(self, asset_id: int, data: Dict[str, Any]) -> bool:
@@ -559,11 +585,11 @@ class SnipeITClient:
             "note": note,
         }
         
-        logger.info(f"Checking out asset {asset_id} to user {user_id}")
+        logger.debug(f"Checking out asset {asset_id} to user {user_id}")
         
         response = self._request("POST", f"/hardware/{asset_id}/checkout", json_data=payload)
         if response and response.status_code in (200, 201):
-            logger.info(f"Checkout successful: asset {asset_id} -> user {user_id}")
+            logger.debug(f"Checkout successful: asset {asset_id} -> user {user_id}")
             return True
         
         logger.error(f"Checkout failed: asset {asset_id} -> user {user_id}")
@@ -582,11 +608,11 @@ class SnipeITClient:
         """
         payload = {"note": note}
         
-        logger.info(f"Checking in asset {asset_id}")
+        logger.debug(f"Checking in asset {asset_id}")
         
         response = self._request("POST", f"/hardware/{asset_id}/checkin", json_data=payload)
         if response and response.status_code in (200, 201):
-            logger.info(f"Check-in successful: asset {asset_id}")
+            logger.debug(f"Check-in successful: asset {asset_id}")
             return True
         
         logger.error(f"Check-in failed: asset {asset_id}")
@@ -637,14 +663,14 @@ class SnipeITClient:
         Returns:
             List of model dictionaries
         """
-        logger.info("Fetching all models from Snipe-IT...")
+        logger.debug("Fetching all models from Snipe-IT...")
         
         response = self._request("GET", "/models", params={"limit": limit})
         if not response:
             return []
         
         models = response.json().get("rows", [])
-        logger.info(f"Retrieved {len(models)} models")
+        logger.debug(f"Retrieved {len(models)} models")
         return models
     
     def get_model_name_to_id_map(self) -> Dict[str, int]:
@@ -684,7 +710,7 @@ class SnipeITClient:
             "category_id": category_id,
         }
         
-        logger.info(f"Creating model: {name}")
+        logger.debug(f"Creating model: {name}")
         
         response = self._request("POST", "/models", json_data=payload)
         if not response or response.status_code not in (200, 201):
@@ -694,7 +720,7 @@ class SnipeITClient:
         result = response.json()
         if result.get("status") == "success":
             model_id = result.get("payload", {}).get("id")
-            logger.info(f"Created model '{name}' with ID={model_id}")
+            logger.debug(f"Created model '{name}' with ID={model_id}")
             return model_id
         
         logger.error(f"Model creation failed: {result}")
@@ -711,7 +737,7 @@ class SnipeITClient:
         Returns:
             Dict mapping manufacturer name (lowercase) to ID
         """
-        logger.info("Fetching manufacturers from Snipe-IT...")
+        logger.debug("Fetching manufacturers from Snipe-IT...")
         
         response = self._request("GET", "/manufacturers", params={"limit": 500})
         if not response:
@@ -724,7 +750,7 @@ class SnipeITClient:
             if "name" in row and "id" in row
         }
         
-        logger.info(f"Retrieved {len(manufacturers)} manufacturers")
+        logger.debug(f"Retrieved {len(manufacturers)} manufacturers")
         return manufacturers
     
     def create_manufacturer(self, name: str) -> Optional[int]:
@@ -739,7 +765,7 @@ class SnipeITClient:
         """
         payload = {"name": name}
         
-        logger.info(f"Creating manufacturer: {name}")
+        logger.debug(f"Creating manufacturer: {name}")
         
         response = self._request("POST", "/manufacturers", json_data=payload)
         if not response or response.status_code not in (200, 201):
@@ -749,7 +775,7 @@ class SnipeITClient:
         result = response.json()
         if result.get("status") == "success":
             mfr_id = result.get("payload", {}).get("id")
-            logger.info(f"Created manufacturer '{name}' with ID={mfr_id}")
+            logger.debug(f"Created manufacturer '{name}' with ID={mfr_id}")
             return mfr_id
         
         return None
@@ -812,7 +838,102 @@ class SnipeITClient:
                 return {"id": first.get("id"), "serial": first.get("serial"), **first}
         
         return None
-    
+
+    # ------------------------------------------------------------------
+    # Accessories
+    # ------------------------------------------------------------------
+
+    def get_all_accessories(self, limit: int = 500) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch all accessories from Snipe-IT, indexed by lowercase name.
+
+        Returns:
+            {lowercase_name: accessory_dict}
+        """
+        accessories: Dict[str, Dict[str, Any]] = {}
+        offset = 0
+
+        while True:
+            response = self._request(
+                "GET", "/accessories",
+                params={"limit": limit, "offset": offset},
+            )
+            if not response:
+                break
+            data = response.json()
+            for acc in data.get("rows", []):
+                name = (acc.get("name") or "").lower()
+                if name:
+                    accessories[name] = acc
+            total = data.get("total", 0)
+            offset += limit
+            if offset >= total or not data.get("rows"):
+                break
+
+        logger.debug(f"Retrieved {len(accessories)} accessories from Snipe-IT")
+        return accessories
+
+    def create_accessory(
+        self,
+        name: str,
+        category_id: int,
+        qty: int = 100,
+    ) -> Optional[Dict[str, Any]]:
+        """Create a new accessory in Snipe-IT."""
+        payload = {"name": name, "qty": qty, "category_id": category_id}
+        response = self._request("POST", "/accessories", json_data=payload)
+        if not response or response.status_code not in (200, 201):
+            logger.error(f"Failed to create accessory '{name}'")
+            return None
+        result = response.json()
+        if result.get("status") == "success":
+            acc = result.get("payload")
+            logger.debug(f"Created accessory '{name}' (ID={acc.get('id') if acc else '?'})")
+            return acc
+        logger.error(f"Create accessory '{name}': {result.get('messages')}")
+        return None
+
+    def get_accessory_checkouts(self, accessory_id: int, limit: int = 500) -> List[Dict[str, Any]]:
+        """Get all users who have a specific accessory checked out."""
+        response = self._request(
+            "GET", f"/accessories/{accessory_id}/checkedout",
+            params={"limit": limit},
+        )
+        if not response or response.status_code != 200:
+            return []
+        return response.json().get("rows", [])
+
+    def checkout_accessory(
+        self,
+        accessory_id: int,
+        user_id: int,
+        note: str = "",
+    ) -> bool:
+        """Check out one unit of an accessory to a user."""
+        payload: Dict[str, Any] = {"assigned_user": user_id, "checkout_qty": 1}
+        if note:
+            payload["note"] = note
+        response = self._request(
+            "POST", f"/accessories/{accessory_id}/checkout", json_data=payload,
+        )
+        if not response:
+            return False
+        if response.status_code == 200 and response.json().get("status") == "success":
+            return True
+        logger.warning(
+            f"Accessory checkout failed: acc={accessory_id} user={user_id} "
+            f"— {response.text[:200]}"
+        )
+        return False
+
     def close(self) -> None:
         """Close the session."""
         self.session.close()
+
+    def ping(self) -> bool:
+        """Quick connectivity check — fetches page 1 of users (limit=1)."""
+        try:
+            resp = self._request("GET", "/users", params={"limit": 1})
+            return resp is not None and resp.status_code == 200
+        except Exception:
+            return False

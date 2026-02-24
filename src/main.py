@@ -11,7 +11,7 @@ from typing import Optional
 
 # Module imports
 from core.config import get_config, Config
-from core.health import start_health_server, get_health_server
+from infra.health import start_health_server, get_health_server
 from modules import (
     LeaversModule, 
     SnipeToJamfModule, 
@@ -19,7 +19,8 @@ from modules import (
     ModelSyncModule, 
     WakeUpModule,
     ReconciliationModule,
-    AzureStartersModule
+    AzureStartersModule,
+    CorrectionModule,
 )
 
 
@@ -179,6 +180,20 @@ def cmd_azure_starters(args, config: Config):
     return (0 if error_count == 0 else 1, results)
 
 
+def cmd_correction(args, config: Config):
+    """Run Self-Healing Correction module - detect and fix wrong assignments."""
+    print("\n🔧 Running Self-Healing Correction Module...")
+    print("   Validating existing Snipe-IT assignments against Jamf data.\n")
+    
+    module = CorrectionModule(config)
+    results = module.run(dry_run=args.dry_run)
+    
+    errors = results.get('errors', 0)
+    error_count = len(errors) if isinstance(errors, list) else errors
+    
+    return (0 if error_count == 0 else 1, results)
+
+
 def cmd_run_all(args, config: Config):
     """Run all modules in sequence (except WakeUp which requires parameters)."""
     import os
@@ -187,10 +202,11 @@ def cmd_run_all(args, config: Config):
     print("   (WakeUp module skipped - requires explicit parameters)\n")
     
     modules = [
-        ("Leavers", lambda: cmd_leavers(args, config)),
-        ("Snipe-to-Jamf", lambda: cmd_snipe_to_jamf(args, config)),
-        ("User Match", lambda: cmd_user_match(args, config)),
         ("Model Sync", lambda: cmd_model_sync(args, config)),
+        ("Correction", lambda: cmd_correction(args, config)),
+        ("User Match", lambda: cmd_user_match(args, config)),
+        ("Snipe-to-Jamf", lambda: cmd_snipe_to_jamf(args, config)),
+        ("Leavers", lambda: cmd_leavers(args, config)),
     ]
     
     run_results = {}
@@ -334,6 +350,24 @@ def _write_run_summary(filepath: str, args, results: dict, module_data: dict):
                     f.write(f"  Skipped:          {data.get('skipped', 0)}\n")
                     f.write(f"  Errors:           {data.get('errors', 0)}\n")
         
+        # Self-Healing Correction Module
+        if "Correction" in module_data:
+            f.write("\n" + "-" * 70 + "\n")
+            f.write("SELF-HEALING CORRECTION MODULE\n")
+            f.write("-" * 70 + "\n")
+            data = module_data["Correction"]
+            if isinstance(data, dict):
+                if "exception" in data:
+                    f.write(f"  CRASHED: {data['exception']}\n")
+                else:
+                    f.write(f"  Assets checked:        {data.get('total_assets_checked', 0)}\n")
+                    f.write(f"  Correct assignments:   {data.get('correct_assignments', 0)}\n")
+                    f.write(f"  Mismatches found:      {data.get('mismatches_found', 0)}\n")
+                    f.write(f"  Corrections made:      {data.get('corrections_made', 0)}\n")
+                    f.write(f"  No Jamf device:        {data.get('no_jamf_device', 0)}\n")
+                    f.write(f"  No fresh match:        {data.get('no_fresh_match', 0)}\n")
+                    f.write(f"  Errors:                {data.get('errors', 0)}\n")
+        
         f.write("\n" + "=" * 70 + "\n")
         f.write("END OF REPORT\n")
         f.write("=" * 70 + "\n")
@@ -354,6 +388,7 @@ def interactive_menu(config: Config):
         print("  6. Reconciliation - Find inventory discrepancies")
         print("  7. Run All (except WakeUp)")
         print("  8. Run All (DRY RUN)")
+        print("  9. Self-Healing Correction - Detect & fix wrong assignments")
         print("  0. Exit")
         
         choice = input("\n  Enter your choice: ").strip()
@@ -407,6 +442,8 @@ def interactive_menu(config: Config):
         elif choice == '8':
             args.dry_run = True
             cmd_run_all(args, config)
+        elif choice == '9':
+            cmd_correction(args, config)
         elif choice == '0':
             print("\n  Goodbye! 👋\n")
             break
@@ -517,6 +554,12 @@ Examples:
     starters_parser.add_argument('--dry-run', '-n', action='store_true',
         help='Simulate actions without making changes')
     
+    # Self-Healing Correction command
+    correction_parser = subparsers.add_parser('correction',
+        help='Detect and fix wrong asset assignments from previous runs')
+    correction_parser.add_argument('--dry-run', '-n', action='store_true',
+        help='Report mismatches without making changes')
+    
     # Health server command
     health_parser = subparsers.add_parser('health-server',
         help='Start health check HTTP server')
@@ -567,6 +610,7 @@ Examples:
         'all': cmd_run_all,
         'reconcile': cmd_reconcile,
         'azure-starters': cmd_azure_starters,
+        'correction': cmd_correction,
     }
     
     # Special handling for health server (long-running)

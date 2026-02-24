@@ -216,7 +216,7 @@ class AzureClient:
         Returns:
             List of user dictionaries
         """
-        logger.info(f"Fetching disabled users with filter: {filter_clause}")
+        logger.debug(f"Fetching disabled users with filter: {filter_clause}")
         
         base_url = "https://graph.microsoft.com/v1.0/users"
         params = {
@@ -250,7 +250,7 @@ class AzureClient:
             url = data.get("@odata.nextLink")
             params = None  # Next link includes params
         
-        logger.info(f"Retrieved {len(users)} disabled users")
+        logger.debug(f"Retrieved {len(users)} disabled users")
         return users
     
     def get_group_members(self, group_id: str) -> List[Dict[str, Any]]:
@@ -263,11 +263,11 @@ class AzureClient:
         Returns:
             List of user dictionaries (only user objects, not groups/devices)
         """
-        logger.info(f"Fetching members of group: {group_id}")
+        logger.debug(f"Fetching members of group: {group_id}")
         
         base_url = f"https://graph.microsoft.com/v1.0/groups/{group_id}/members"
         params = {
-            "$select": "id,displayName,mail,userPrincipalName,accountEnabled",
+            "$select": "id,displayName,mail,userPrincipalName,accountEnabled,givenName,surname,jobTitle,department,companyName",
         }
         
         members: List[Dict[str, Any]] = []
@@ -299,7 +299,7 @@ class AzureClient:
             url = data.get("@odata.nextLink")
             params = None
         
-        logger.info(f"Retrieved {len(members)} users from group")
+        logger.debug(f"Retrieved {len(members)} users from group")
         return members
     
     def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
@@ -349,3 +349,16 @@ class AzureClient:
     def close(self) -> None:
         """Close the session."""
         self.session.close()
+
+    def ping(self) -> bool:
+        """Quick connectivity check — fetch a single user from Graph."""
+        try:
+            token = self._get_token()
+            resp = self.session.get(
+                "https://graph.microsoft.com/v1.0/users?$top=1&$select=id",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            return resp.status_code == 200
+        except Exception:
+            return False

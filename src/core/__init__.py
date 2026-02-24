@@ -1,23 +1,13 @@
 """
 Jamf-SnipeIT Suite - Core module
-Contains unified API clients and configuration.
+Configuration, run context, and sync state.
+
+API clients have moved to ``clients/``.
+Infrastructure helpers have moved to ``infra/``.
 """
 from .config import Config, get_config, reload_config, ConfigurationError
-from .jamf_client import JamfClient
-from .snipe_client import SnipeITClient
-from .azure_client import AzureClient
-from .health import HealthCheckServer, start_health_server, stop_health_server, get_health_server
-
-# Optional async clients (requires aiohttp)
-try:
-    from .async_clients import AsyncJamfClient, AsyncSnipeClient, ParallelProcessor, AsyncConfig
-    _HAS_ASYNC = True
-except ImportError:
-    AsyncJamfClient = None
-    AsyncSnipeClient = None
-    ParallelProcessor = None
-    AsyncConfig = None
-    _HAS_ASYNC = False
+from .run_context import RunContext, ModuleMetrics
+from .state import SyncState, RetryQueue
 
 __all__ = [
     # Config
@@ -25,18 +15,9 @@ __all__ = [
     "get_config",
     "reload_config",
     "ConfigurationError",
-    # Sync Clients
-    "JamfClient",
-    "SnipeITClient",
-    "AzureClient",
-    # Health Check
-    "HealthCheckServer",
-    "start_health_server",
-    "stop_health_server",
-    "get_health_server",
-    # Async Clients (optional)
-    "AsyncJamfClient",
-    "AsyncSnipeClient",
-    "ParallelProcessor",
-    "AsyncConfig",
+    # RunContext & State
+    "RunContext",
+    "ModuleMetrics",
+    "SyncState",
+    "RetryQueue",
 ]

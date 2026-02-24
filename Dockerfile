@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Stage 2: Runtime
 FROM python:3.11-slim
 
-LABEL maintainer="IT Team"
+LABEL maintainer="Davide Caputo <CaputoDav@gmail.com>"
 LABEL description="Jamf-SnipeIT Suite - Unified Asset Management Tool"
 LABEL version="1.0.0"
 
@@ -66,6 +66,6 @@ USER appuser
 # Default command: run scheduler with startup execution
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-# Health check - verify Python can import core modules and config exists
-HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "from core.config import get_config; import os; assert os.path.exists('/app/config/config.yaml'), 'Config missing'" || exit 1
+# Health check - hit the internal health server (started by docker_scheduler.py)
+HEALTHCHECK --interval=60s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)" || exit 1

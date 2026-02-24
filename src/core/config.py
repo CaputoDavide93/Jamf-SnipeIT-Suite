@@ -1,8 +1,10 @@
 """
 Jamf-SnipeIT Suite - Configuration Loader
 Unified configuration management for all modules.
+Supports environment variable substitution: ${ENV_VAR} or ${ENV_VAR:-default}
 """
 import os
+import re
 import yaml
 import logging
 from pathlib import Path
@@ -82,6 +84,26 @@ class LoggingConfig:
 
 
 @dataclass
+@dataclass
+class SlackConfig:
+    """Slack notification configuration."""
+    enabled: bool = False
+    bot_token: str = ""
+    channel_id: str = ""
+    notify_on_error: bool = True
+    notify_disabled_with_assets: bool = True
+    notify_module_summary: bool = False
+
+
+@dataclass
+class HiBobConfig:
+    """HiBob API configuration."""
+    service_user_id: str = ""
+    service_user_token: str = ""
+    base_url: str = "https://api.hibob.com/v1"
+
+
+@dataclass
 class ModuleSettings:
     """Settings for individual modules."""
     enabled: bool = True
@@ -122,6 +144,8 @@ class Config:
         self.matching = self._parse_matching()
         self.api = self._parse_api()
         self.logging = self._parse_logging()
+        self.slack = self._parse_slack()
+        self.hibob = self._parse_hibob()
         self.scheduler = self._raw.get("scheduler", {})
         self.modules = self._raw.get("modules", {})
         
@@ -181,10 +205,32 @@ class Config:
         )
     
     def _load(self) -> None:
-        """Load configuration from YAML file."""
+        """Load configuration from YAML file with environment variable substitution."""
         logger.info(f"Loading configuration from: {self._config_path}")
         with open(self._config_path, "r", encoding="utf-8") as f:
-            self._raw = yaml.safe_load(f) or {}
+            raw_text = f.read()
+        # Substitute ${VAR} and ${VAR:-default} patterns with environment variables
+        raw_text = self._substitute_env_vars(raw_text)
+        self._raw = yaml.safe_load(raw_text) or {}
+
+    @staticmethod
+    def _substitute_env_vars(text: str) -> str:
+        """
+        Replace ${VAR} and ${VAR:-default} with environment variable values.
+        If VAR is unset and no default is provided, the placeholder is left unchanged.
+        """
+        def _replacer(match: re.Match) -> str:
+            var_name = match.group(1)
+            default = match.group(3)  # group 3 is the default after :-
+            value = os.environ.get(var_name)
+            if value is not None:
+                return value
+            if default is not None:
+                return default
+            return match.group(0)  # leave placeholder unchanged
+
+        # Pattern: ${VAR} or ${VAR:-default_value}
+        return re.sub(r'\$\{(\w+)(:-([^}]*))?\}', _replacer, text)
     
     def reload(self) -> None:
         """Reload configuration from file."""
@@ -195,6 +241,8 @@ class Config:
         self.matching = self._parse_matching()
         self.api = self._parse_api()
         self.logging = self._parse_logging()
+        self.slack = self._parse_slack()
+        self.hibob = self._parse_hibob()
         self.scheduler = self._raw.get("scheduler", {})
         self.modules = self._raw.get("modules", {})
     
@@ -294,6 +342,27 @@ class Config:
             dir=data.get("dir", "./logs"),
             audit_csv=bool(data.get("audit_csv", True)),
             max_log_files=self._safe_int(data.get("max_log_files"), 30, "logging.max_log_files"),
+        )
+    
+    def _parse_slack(self) -> SlackConfig:
+        """Parse Slack notification configuration."""
+        data = self._raw.get("slack", {})
+        return SlackConfig(
+            enabled=bool(data.get("enabled", False)),
+            bot_token=data.get("bot_token", ""),
+            channel_id=data.get("channel_id", ""),
+            notify_on_error=bool(data.get("notify_on_error", True)),
+            notify_disabled_with_assets=bool(data.get("notify_disabled_with_assets", True)),
+            notify_module_summary=bool(data.get("notify_module_summary", False)),
+        )
+    
+    def _parse_hibob(self) -> HiBobConfig:
+        """Parse HiBob API configuration."""
+        data = self._raw.get("hibob", {})
+        return HiBobConfig(
+            service_user_id=data.get("service_user_id", ""),
+            service_user_token=data.get("service_user_token", ""),
+            base_url=data.get("base_url", "https://api.hibob.com/v1"),
         )
     
     def get_module_settings(self, module_name: str) -> ModuleSettings:

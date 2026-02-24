@@ -1,0 +1,454 @@
+"""
+Jamf-SnipeIT Suite - Self-Healing Correction Module
+Detects and fixes wrong matches/assignments from previous runs.
+
+Runs BEFORE User Match on each execution to:
+1. Fetch all checked-out Snipe-IT assets
+2. For each, look up the Jamf computer by serial and re-compute the expected user
+3. Compare the current Snipe-IT assignment against the fresh match
+4. If they disagree, log the mismatch and optionally correct it
+5. Produce a detailed audit CSV of all corrections
+"""
+import logging
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+from core.config import Config
+from clients.jamf import JamfClient
+from clients.snipeit import SnipeITClient
+from infra.audit_csv import AuditCSV
+from infra.progress import ProgressTracker
+from infra.helpers import rate_limit_delay
+from matching.user_matcher import UserMatcher, pick_primary_local_identity
+
+logger = logging.getLogger(__name__)
+
+
+class CorrectionModule:
+    """
+    Self-healing module that validates existing Snipe-IT asset assignments
+    against freshly computed user matches and corrects mismatches.
+    """
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.settings = config.modules.get("correction", {})
+        self.batch_size = self.settings.get("batch_size", 50)
+        self.batch_delay = self.settings.get("batch_delay_seconds", 2)
+
+        # Clients
+        self.jamf = JamfClient(
+            base_url=config.jamf.base_url,
+            username=config.jamf.username,
+            password=config.jamf.password,
+            client_id=config.jamf.client_id,
+            client_secret=config.jamf.client_secret,
+            timeout=config.api.timeout_seconds,
+            max_retries=config.api.max_retries,
+            retry_delay=config.api.retry_delay_seconds,
+        )
+        self.snipe = SnipeITClient(
+            base_url=config.snipeit.base_url,
+            api_token=config.snipeit.api_token,
+            timeout=config.api.timeout_seconds,
+            max_retries=config.api.max_retries,
+            retry_delay=config.api.retry_delay_seconds,
+            rate_limit_wait=config.api.rate_limit_wait_seconds,
+        )
+
+        self._user_matcher: Optional[UserMatcher] = None
+        # Cache for Jamf computer details (serial → dict), populated lazily
+        self._jamf_cache: Dict[str, Optional[Dict]] = {}
+
+    # ------------------------------------------------------------------
+    # Public
+    # ------------------------------------------------------------------
+
+    def run(self, dry_run: bool = False) -> Dict[str, Any]:
+        """
+        Run the self-healing correction pass.
+
+        Args:
+            dry_run: If True, report mismatches but make no changes.
+
+        Returns:
+            Results dictionary with statistics and details.
+        """
+        logger.info(f"Starting Self-Healing Correction: dry_run={dry_run}")
+
+        results: Dict[str, Any] = {
+            "total_assets_checked": 0,
+            "correct_assignments": 0,
+            "mismatches_found": 0,
+            "corrections_made": 0,
+            "unassigned_skipped": 0,
+            "no_jamf_device": 0,
+            "no_fresh_match": 0,
+            "pending_skipped": 0,
+            "errors": 0,
+            "details": [],  # list of per-asset dicts
+        }
+
+        # 1. Fetch ALL Snipe-IT assets (one bulk call)
+        logger.debug("Fetching all Snipe-IT assets...")
+        all_assets = self.snipe.get_all_assets()
+        logger.debug(f"Retrieved {len(all_assets)} assets")
+
+        # 2. Filter to only checked-out / deployed assets
+        checked_out_assets = []
+        pending_id = self.config.snipeit.status_pending_id
+        for asset in all_assets:
+            assigned_user_id = self.snipe.get_assigned_user_id(asset)
+            if not assigned_user_id:
+                results["unassigned_skipped"] += 1
+                continue
+
+            # Skip pending/leaver assets — those are intentionally unassigned by Leavers
+            status_label = asset.get("status_label")
+            status_id = None
+            if isinstance(status_label, dict):
+                status_id = status_label.get("id")
+            if status_id and status_id == pending_id:
+                results["pending_skipped"] += 1
+                continue
+
+            checked_out_assets.append((asset, assigned_user_id))
+
+        logger.info(
+            f"Found {len(checked_out_assets)} checked-out assets to validate "
+            f"({results['unassigned_skipped']} unassigned, "
+            f"{results['pending_skipped']} pending — skipped)"
+        )
+
+        if not checked_out_assets:
+            self._print_summary(results, dry_run)
+            return results
+
+        # 3. Prepare audit CSV
+        audit = AuditCSV(
+            log_dir=self.config.logging.dir,
+            module_name="correction",
+            enabled=self.config.logging.audit_csv,
+            headers=[
+                "timestamp",
+                "serial",
+                "asset_id",
+                "asset_name",
+                "current_user_id",
+                "current_user_name",
+                "expected_user_id",
+                "expected_user_name",
+                "jamf_username",
+                "match_reason",
+                "action",
+                "result",
+                "notes",
+            ],
+        )
+
+        progress = ProgressTracker("Correction", total=len(checked_out_assets), log_every=50)
+        
+        try:
+            for i, (asset, current_uid) in enumerate(checked_out_assets, 1):
+                results["total_assets_checked"] += 1
+
+                try:
+                    self._validate_asset(
+                        asset, current_uid, dry_run, results, audit
+                    )
+                except Exception as e:
+                    logger.exception(
+                        f"Error validating asset {asset.get('id')}: {e}"
+                    )
+                    results["errors"] += 1
+                    audit.write(
+                        serial=asset.get("serial", ""),
+                        asset_id=str(asset.get("id", "")),
+                        action="error",
+                        result="error",
+                        notes=str(e),
+                    )
+
+                progress.advance()
+
+                # Batch delay
+                if i % self.batch_size == 0 and i < len(checked_out_assets):
+                    batch_num = i // self.batch_size
+                    total_batches = (
+                        len(checked_out_assets) + self.batch_size - 1
+                    ) // self.batch_size
+                    rate_limit_delay(
+                        self.batch_delay, "Correction", batch_num, total_batches
+                    )
+        finally:
+            audit.close()
+        
+        progress.finish(extra=f"mismatches={results.get('mismatches', 0)}, corrected={results.get('corrected', 0)}, errors={results['errors']}")
+
+        self._print_summary(results, dry_run)
+        return results
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _get_user_matcher(self) -> UserMatcher:
+        """Lazy-initialise the UserMatcher with all Snipe-IT users."""
+        if self._user_matcher is None:
+            logger.debug("Loading Snipe-IT users for correction matching...")
+            users = self.snipe.get_all_users()
+            self._user_matcher = UserMatcher(
+                users=users,
+                email_domain=self.config.matching.email_domain,
+                min_score=self.config.matching.min_score,
+                weight_lcs=self.config.matching.weight_lcs,
+                weight_char_overlap=self.config.matching.weight_char_overlap,
+                weight_bigram_dice=self.config.matching.weight_bigram_dice,
+                use_bigram_dice=self.config.matching.use_bigram_dice,
+            )
+            logger.debug(f"Loaded {len(users)} users for correction matching")
+        return self._user_matcher
+
+    def _validate_asset(
+        self,
+        asset: Dict[str, Any],
+        current_uid: int,
+        dry_run: bool,
+        results: Dict[str, Any],
+        audit: AuditCSV,
+    ) -> None:
+        """Validate a single checked-out asset against fresh Jamf data."""
+
+        asset_id = asset.get("id")
+        serial = (asset.get("serial") or "").strip()
+        asset_name = asset.get("name") or asset.get("asset_tag") or str(asset_id)
+
+        # Resolve current assigned user name for logging
+        assigned_to = asset.get("assigned_to")
+        current_user_name = ""
+        if isinstance(assigned_to, dict):
+            current_user_name = assigned_to.get("name", "")
+
+        if not serial:
+            logger.debug(f"Asset {asset_id} has no serial, skipping correction")
+            return
+
+        # ---- Look up the Jamf computer by serial (with cache) ----
+        if serial.upper() not in self._jamf_cache:
+            self._jamf_cache[serial.upper()] = self.jamf.get_computer_by_serial(serial)
+        jamf_comp = self._jamf_cache[serial.upper()]
+        if not jamf_comp:
+            # Asset exists in Snipe-IT but not in Jamf — can't validate
+            results["no_jamf_device"] += 1
+            logger.debug(f"Asset {asset_id} ({serial}) '{asset_name}': no matching Jamf computer — skipping")
+            return
+
+        # Extract local user from Jamf (same logic as User Match)
+        groups_accounts = jamf_comp.get("groups_accounts", {}) or {}
+        local_users = (
+            groups_accounts.get("local_accounts")
+            or groups_accounts.get("local_users")
+            or groups_accounts.get("users")
+            or []
+        )
+        if isinstance(local_users, dict) and "user" in local_users:
+            local_users = local_users["user"]
+        elif isinstance(local_users, dict):
+            local_users = [local_users]
+        elif not isinstance(local_users, list):
+            local_users = []
+
+        primary_username, full_name_hint = pick_primary_local_identity(
+            local_users,
+            skip_usernames=self.config.matching.skip_usernames,
+            location=jamf_comp.get("location"),
+        )
+
+        if not primary_username:
+            # No primary user in Jamf — nothing to match against
+            results["no_fresh_match"] += 1
+            return
+
+        # Skip generic/shared usernames
+        skip_usernames = self.config.matching.skip_usernames  # already lowercase
+        if primary_username.lower() in skip_usernames:
+            results["no_fresh_match"] += 1
+            return
+
+        # ---- Re-compute the correct user match ----
+        matcher = self._get_user_matcher()
+        fresh_match, debug_info = matcher.best_match(
+            full_name_hint=full_name_hint or "",
+            username=primary_username,
+        )
+
+        # Rejected due to ambiguity — can't validate
+        if debug_info.get("rejected_reason"):
+            results["no_fresh_match"] += 1
+            return
+
+        if not fresh_match:
+            # No confident match today — leave the existing assignment alone
+            results["no_fresh_match"] += 1
+            return
+
+        expected_uid = int(fresh_match.get("id", 0))
+        expected_user_name = fresh_match.get("name", "")
+        match_reason = debug_info.get("exact_hit_reason", "fuzzy")
+
+        # ---- Compare ----
+        if current_uid == expected_uid:
+            results["correct_assignments"] += 1
+            logger.debug(
+                f"Asset {asset_id} ({serial}): correctly assigned to "
+                f"user {current_uid} ({current_user_name})"
+            )
+            return
+
+        # ---- Mismatch detected ----
+        results["mismatches_found"] += 1
+        logger.warning(
+            f"MISMATCH: Asset {asset_id} ({serial}) '{asset_name}' "
+            f"assigned to user {current_uid} ({current_user_name}) "
+            f"but should be user {expected_uid} ({expected_user_name}) "
+            f"[match: {match_reason}, jamf_user: {primary_username}]"
+        )
+
+        if dry_run:
+            audit.write(
+                serial=serial,
+                asset_id=str(asset_id),
+                asset_name=asset_name,
+                current_user_id=str(current_uid),
+                current_user_name=current_user_name,
+                expected_user_id=str(expected_uid),
+                expected_user_name=expected_user_name,
+                jamf_username=primary_username,
+                match_reason=match_reason,
+                action="mismatch_detected",
+                result="dry_run",
+                notes="Would reassign",
+            )
+            return
+
+        # ---- Correct the assignment ----
+        # Check-in first, then checkout to the correct user
+        checkin_ok = self.snipe.checkin_asset(
+            asset_id, note="Self-healing correction: wrong user assignment detected"
+        )
+        if not checkin_ok:
+            logger.error(f"Correction failed: could not check-in asset {asset_id}")
+            results["errors"] += 1
+            audit.write(
+                serial=serial,
+                asset_id=str(asset_id),
+                asset_name=asset_name,
+                current_user_id=str(current_uid),
+                current_user_name=current_user_name,
+                expected_user_id=str(expected_uid),
+                expected_user_name=expected_user_name,
+                jamf_username=primary_username,
+                match_reason=match_reason,
+                action="correct",
+                result="error",
+                notes="Check-in failed",
+            )
+            return
+
+        checkout_ok = self.snipe.checkout_asset(
+            asset_id,
+            expected_uid,
+            note=f"Self-healing correction: reassigned from user {current_uid} to {expected_uid}",
+        )
+        if checkout_ok:
+            results["corrections_made"] += 1
+            logger.info(
+                f"CORRECTED: Asset {asset_id} ({serial}) reassigned "
+                f"from user {current_uid} ({current_user_name}) "
+                f"to user {expected_uid} ({expected_user_name})"
+            )
+            audit.write(
+                serial=serial,
+                asset_id=str(asset_id),
+                asset_name=asset_name,
+                current_user_id=str(current_uid),
+                current_user_name=current_user_name,
+                expected_user_id=str(expected_uid),
+                expected_user_name=expected_user_name,
+                jamf_username=primary_username,
+                match_reason=match_reason,
+                action="correct",
+                result="ok",
+                notes="Reassigned successfully",
+            )
+        else:
+            results["errors"] += 1
+            logger.error(
+                f"Correction failed: checked-in asset {asset_id} but checkout "
+                f"to user {expected_uid} failed — asset is now unassigned!"
+            )
+            audit.write(
+                serial=serial,
+                asset_id=str(asset_id),
+                asset_name=asset_name,
+                current_user_id=str(current_uid),
+                current_user_name=current_user_name,
+                expected_user_id=str(expected_uid),
+                expected_user_name=expected_user_name,
+                jamf_username=primary_username,
+                match_reason=match_reason,
+                action="correct",
+                result="error",
+                notes="Checkout failed after check-in — asset unassigned!",
+            )
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+
+    def _print_summary(self, results: Dict[str, Any], dry_run: bool) -> None:
+        mode = "DRY RUN" if dry_run else "LIVE RUN"
+
+        print("\n" + "=" * 60)
+        print(f"SELF-HEALING CORRECTION - {mode} COMPLETE")
+        print("=" * 60)
+        print(f"Assets checked:          {results['total_assets_checked']}")
+        print(f"Correct assignments:     {results['correct_assignments']}")
+        print(f"Mismatches found:        {results['mismatches_found']}")
+        print(f"Corrections made:        {results['corrections_made']}")
+        print(f"No Jamf device:          {results['no_jamf_device']}")
+        print(f"No fresh match:          {results['no_fresh_match']}")
+        print(f"Pending (skipped):       {results['pending_skipped']}")
+        print(f"Unassigned (skipped):    {results['unassigned_skipped']}")
+        print(f"Errors:                  {results['errors']}")
+        print("=" * 60 + "\n")
+
+    def close(self) -> None:
+        """Clean up resources."""
+        self.jamf.close()
+        self.snipe.close()
+
+
+# ======================================================================
+# Convenience function
+# ======================================================================
+
+
+def run_correction(
+    config: Config, dry_run: bool = False
+) -> Dict[str, Any]:
+    """
+    Convenience function to run the self-healing correction module.
+
+    Args:
+        config: Suite configuration
+        dry_run: If True, don't make changes
+
+    Returns:
+        Results dictionary
+    """
+    module = CorrectionModule(config)
+    try:
+        return module.run(dry_run=dry_run)
+    finally:
+        module.close()
