@@ -80,33 +80,20 @@ def setup_logging(
 # =============================================================================
 
 def wait_with_countdown(seconds: float, message: str = "Rate limiting") -> None:
-    """Wait while showing a countdown on the same console line.
+    """Wait silently for the given delay.
     
-    For short waits (≤5s) we simply sleep — no output — to avoid
-    flooding Docker logs with per-item countdown lines.
+    Short waits (≤5s) and longer waits both just sleep — no console
+    output — to avoid flooding Docker logs with countdown lines.
     """
-    import sys
-
     if seconds <= 0:
         return
     if seconds <= 5:
-        # Short delay: just sleep silently
         time.sleep(seconds)
         return
 
-    # Only show countdown for long waits (e.g. 60s rate-limit backoff)
-    whole_seconds = int(seconds)
-    for remaining in range(whole_seconds, 0, -1):
-        sys.stdout.write(f"\r⏳ {message} - waiting {remaining}s...")
-        sys.stdout.flush()
-        time.sleep(1)
-
-    remainder = seconds - whole_seconds
-    if remainder > 0:
-        time.sleep(remainder)
-
-    sys.stdout.write("\r" + " " * 70 + "\r")
-    sys.stdout.flush()
+    # Long waits: log once at debug, then sleep silently
+    logger.debug("%s — pausing %.0fs", message, seconds)
+    time.sleep(seconds)
 
 
 def rate_limit_delay(
