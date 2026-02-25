@@ -17,11 +17,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}"
-echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║              Jamf-SnipeIT Suite - Initializing                ║"
-echo "╚═══════════════════════════════════════════════════════════════╝"
-echo -e "${NC}"
+echo -e "${BLUE}Jamf-SnipeIT Suite — Initializing${NC}"
 
 # Change to app directory
 cd /app
@@ -34,22 +30,17 @@ if [ ! -f "/app/config/config.yaml" ]; then
     exit 1
 fi
 
-echo -e "${GREEN}✅ Configuration file found${NC}"
+echo -e "${GREEN}Config: found${NC}"
 
 # Create logs directory if needed
 mkdir -p /app/logs
 
-# Export Python path
-export PYTHONPATH=/app/src:$PYTHONPATH
-export PYTHONUNBUFFERED=1
-
-# Check Python dependencies
-echo -e "${BLUE}📦 Checking dependencies...${NC}"
+# Verify Python dependencies are installed (built into image)
 python -c "import yaml, requests, msal, apscheduler" 2>/dev/null || {
-    echo -e "${YELLOW}⚠️  Installing missing dependencies...${NC}"
-    pip install -q -r /app/requirements.txt
+    echo -e "${RED}❌ Missing Python dependencies — rebuild the Docker image${NC}"
+    exit 1
 }
-echo -e "${GREEN}✅ Dependencies OK${NC}"
+echo -e "${GREEN}Dependencies: OK${NC}"
 
 # Determine run mode
 RUN_MODE=${RUN_MODE:-scheduler}
@@ -58,14 +49,13 @@ DRY_RUN=${DRY_RUN:-false}
 # Build dry-run flag
 DRY_RUN_FLAG=""
 if [ "$DRY_RUN" = "true" ] || [ "$DRY_RUN" = "1" ]; then
-    echo -e "${YELLOW}🧪 DRY RUN MODE ENABLED - No changes will be made${NC}"
+    echo -e "${YELLOW}DRY RUN MODE — no changes will be made${NC}"
     DRY_RUN_FLAG="--dry-run"
 fi
 
 case "$RUN_MODE" in
     "scheduler")
-        echo -e "${BLUE}🚀 Starting in SCHEDULER mode${NC}"
-        echo ""
+        echo -e "${BLUE}Mode: SCHEDULER${NC}"
         
         # Run the Docker scheduler script (includes startup run + scheduler)
         exec python -u /app/src/docker_scheduler.py \
@@ -75,8 +65,7 @@ case "$RUN_MODE" in
         ;;
     
     "cli")
-        echo -e "${BLUE}🔧 Starting in CLI mode${NC}"
-        echo ""
+        echo -e "${BLUE}Mode: CLI${NC}"
         
         # Run specific command passed as arguments
         if [ $# -gt 0 ]; then
@@ -89,8 +78,7 @@ case "$RUN_MODE" in
         ;;
     
     "run-once")
-        echo -e "${BLUE}🔄 Running all modules once (no scheduler)${NC}"
-        echo ""
+        echo -e "${BLUE}Mode: RUN-ONCE${NC}"
         
         # Run all modules once and exit
         exec python -u /app/src/docker_scheduler.py \
@@ -100,7 +88,7 @@ case "$RUN_MODE" in
         ;;
     
     "shell")
-        echo -e "${BLUE}🐚 Starting shell${NC}"
+        echo -e "${BLUE}Mode: SHELL${NC}"
         exec /bin/bash
         ;;
     

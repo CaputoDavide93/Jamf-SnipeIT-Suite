@@ -51,7 +51,7 @@ class AzureStartersModule:
         # Module settings
         self.settings = config.modules.get("azure_starters", {})
         self.update_job_titles = self.settings.get("update_job_titles", True)
-        self.default_password = self.settings.get("default_password", "password")
+        self.default_password = self.settings.get("default_password", "ChangeMe!1")
         self.starters_group_id = (
             self.settings.get("group_id") or 
             getattr(config.azure, 'starters_group_id', None)
@@ -71,17 +71,11 @@ class AzureStartersModule:
         
         mode_str = "[DRY RUN] " if self.dry_run else ""
         
-        logger.info(f"")
-        logger.info(f"{'='*60}")
-        logger.info(f"  {mode_str}Azure Starters Module")
-        logger.info(f"{'='*60}")
-        logger.info(f"")
+        logger.info(f"{mode_str}Azure Starters Module")
         
         # Validate configuration
         if not self.starters_group_id:
-            logger.error("No starters group ID configured")
-            logger.error("❌ No starters group ID configured")
-            logger.error("   Set 'azure.starters_group_id' in config.yaml")
+            logger.error("No starters group ID configured — set azure.starters_group_id in config.yaml")
             return {
                 "total_azure_users": 0,
                 "users_created": 0,
@@ -91,12 +85,12 @@ class AzureStartersModule:
             }
         
         # Fetch Azure AD starters
-        logger.debug(f"📡 Fetching Azure AD starters group: {self.starters_group_id}")
+        logger.debug(f"Fetching Azure AD starters group: {self.starters_group_id}")
         azure_users = self.azure.get_group_members(self.starters_group_id)
         logger.debug(f"   Found {len(azure_users)} members in Azure AD starters group")
         
         # Fetch all Snipe-IT users
-        logger.debug(f"📡 Fetching Snipe-IT users...")
+        logger.debug("Fetching Snipe-IT users")
         snipe_users = self.snipe.get_all_users()
         logger.debug(f"   Found {len(snipe_users)} users in Snipe-IT")
         
@@ -109,7 +103,7 @@ class AzureStartersModule:
                 snipe_users_by_email[email] = user
         
         # Process users
-        logger.debug(f"🔄 Processing users...")
+        logger.debug("Processing users")
         results = self._process_users(azure_users, snipe_users_by_email)
         
         # Print summary
@@ -240,7 +234,7 @@ class AzureStartersModule:
                         "jobtitle": job_title
                     })
                     if success:
-                        logger.info(f"   ✅ Updated job title for: {display_name}")
+                        logger.info(f"  Updated job title: {display_name}")
                         results["users_updated"] += 1
                         results["updated_users"].append({
                             "name": display_name,
@@ -302,7 +296,7 @@ class AzureStartersModule:
                 
                 result = self.snipe.create_user(user_data)
                 if result:
-                    logger.info(f"   ✅ Created user: {display_name} ({email})")
+                    logger.info(f"  Created user: {display_name} ({email})")
                     results["users_created"] += 1
                     results["created_users"].append({
                         "name": display_name,
@@ -325,16 +319,15 @@ class AzureStartersModule:
         """
         mode_str = "[DRY RUN] " if self.dry_run else ""
         
-        logger.info(f"")
-        logger.info(f"{'='*60}")
-        logger.info(f"  {mode_str}Azure Starters - Summary")
-        logger.info(f"{'='*60}")
-        logger.info(f"  Total Azure AD users:    {results['total_azure_users']}")
-        logger.info(f"  Users created:           {results['users_created']}")
-        logger.info(f"  Users updated:           {results['users_updated']}")
-        logger.info(f"  Already in Snipe-IT:     {results['already_exists']}")
-        logger.info(f"  Skipped (no email):      {results['skipped']}")
-        logger.info(f"  Errors:                  {len(results['errors'])}")
+        logger.info(
+            f"{mode_str}Azure Starters summary: "
+            f"{results['total_azure_users']} total, "
+            f"{results['users_created']} created, "
+            f"{results['users_updated']} updated, "
+            f"{results['already_exists']} existing, "
+            f"{results['skipped']} skipped, "
+            f"{len(results['errors'])} errors"
+        )
         
         # Show created users
         if results["created_users"]:
@@ -355,13 +348,10 @@ class AzureStartersModule:
         
         # Show errors
         if results["errors"]:
-            logger.error(f"  ⚠️  Errors:")
             for error in results["errors"][:5]:
-                logger.error(f"    • {error}")
+                logger.error(f"  Error: {error}")
             if len(results["errors"]) > 5:
-                logger.error(f"    ... and {len(results['errors']) - 5} more")
-        
-        logger.info(f"{'='*60}")
+                logger.error(f"  ... and {len(results['errors']) - 5} more")
 
     def close(self) -> None:
         """Clean up resources."""

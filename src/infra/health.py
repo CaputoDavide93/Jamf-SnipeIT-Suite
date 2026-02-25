@@ -249,9 +249,7 @@ class HealthCheckServer:
         handler = self._create_handler()
         self._server = HTTPServer((self.host, self.port), handler)
         
-        logger.info(f"Health check server starting on http://{self.host}:{self.port}")
-        print(f"🏥 Health check server running on http://{self.host}:{self.port}")
-        print(f"   Endpoints: /health, /ready, /metrics, /status")
+        logger.info(f"Health server listening on {self.host}:{self.port}")
         
         if blocking:
             self._server.serve_forever()

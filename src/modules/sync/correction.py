@@ -409,19 +409,13 @@ class CorrectionModule:
     def _print_summary(self, results: Dict[str, Any], dry_run: bool) -> None:
         mode = "DRY RUN" if dry_run else "LIVE RUN"
 
-        print("\n" + "=" * 60)
-        print(f"SELF-HEALING CORRECTION - {mode} COMPLETE")
-        print("=" * 60)
-        print(f"Assets checked:          {results['total_assets_checked']}")
-        print(f"Correct assignments:     {results['correct_assignments']}")
-        print(f"Mismatches found:        {results['mismatches_found']}")
-        print(f"Corrections made:        {results['corrections_made']}")
-        print(f"No Jamf device:          {results['no_jamf_device']}")
-        print(f"No fresh match:          {results['no_fresh_match']}")
-        print(f"Pending (skipped):       {results['pending_skipped']}")
-        print(f"Unassigned (skipped):    {results['unassigned_skipped']}")
-        print(f"Errors:                  {results['errors']}")
-        print("=" * 60 + "\n")
+        logger.info(
+            f"Correction ({mode}): {results['total_assets_checked']} checked, "
+            f"{results['correct_assignments']} correct, "
+            f"{results['mismatches_found']} mismatches, "
+            f"{results['corrections_made']} corrected, "
+            f"{results['errors']} errors"
+        )
 
     def close(self) -> None:
         """Clean up resources."""

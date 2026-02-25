@@ -317,17 +317,16 @@ class LeaversModule:
         
         mode = "DRY RUN" if dry_run else "LIVE RUN"
         
-        print("\n" + "=" * 60)
-        print(f"LEAVERS MODULE - {mode} COMPLETE")
-        print("=" * 60)
-        print(f"Total users processed:    {results['total_users']}")
-        print(f"Users with assets:        {results['matched_users']}")
-        print(f"Assets marked pending:    {results['updated_assets']}")
+        parts = [
+            f"Leavers ({mode}): {results['total_users']} users",
+            f"{results['matched_users']} with assets",
+            f"{results['updated_assets']} marked pending",
+        ]
         if results.get("updated_user_names", 0) > 0:
-            print(f"User names updated:       {results['updated_user_names']}")
+            parts.append(f"{results['updated_user_names']} names updated")
         if results.get("errors"):
-            print(f"Errors:                   {len(results['errors'])}")
-        print("=" * 60 + "\n")
+            parts.append(f"{len(results['errors'])} errors")
+        logger.info(", ".join(parts))
     
     def close(self) -> None:
         """Clean up resources."""

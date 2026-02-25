@@ -506,17 +506,15 @@ class UserMatchModule:
         
         mode = "DRY RUN" if dry_run else "LIVE RUN"
         
-        print("\n" + "=" * 60)
-        print(f"USER MATCH MODULE - {mode} COMPLETE")
-        print("=" * 60)
-        print(f"Total devices:      {results['total_devices']}")
-        print(f"Assets created:     {results['assets_created']}")
-        print(f"Assets updated:     {results['assets_updated']}")
-        print(f"Checkouts:          {results['checkouts']}")
-        print(f"Reassignments:      {results['reassignments']}")
-        print(f"Skipped:            {results['skipped']}")
-        print(f"Errors:             {results['errors']}")
-        print("=" * 60 + "\n")
+        logger.info(
+            f"User Match ({mode}): {results['total_devices']} devices, "
+            f"{results['assets_created']} created, "
+            f"{results['assets_updated']} updated, "
+            f"{results['checkouts']} checkouts, "
+            f"{results['reassignments']} reassigned, "
+            f"{results['skipped']} skipped, "
+            f"{results['errors']} errors"
+        )
     
     def close(self) -> None:
         """Clean up resources."""

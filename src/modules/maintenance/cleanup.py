@@ -274,18 +274,15 @@ class CleanupModule:
 
     def _print_summary(self, results: Dict, dry_run: bool) -> None:
         mode = "DRY RUN" if dry_run else "LIVE RUN"
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info(f"  CLEANUP MODULE - {mode} COMPLETE")
-        logger.info("=" * 60)
-        logger.info(f"  Total users scanned:   {results['total_users']}")
-        logger.info(f"  Duplicate groups:      {results['duplicate_groups']}")
-        logger.info(f"  Users merged:          {results['users_merged']}")
-        logger.info(f"  Assets reassigned:     {results['assets_reassigned']}")
-        logger.info(f"  Users deleted:         {results['users_deleted']}")
-        logger.info(f"  Junk removed:          {results['junk_removed']}")
-        logger.info(f"  Errors:                {results['errors']}")
-        logger.info("=" * 60)
+        logger.info(
+            f"Cleanup ({mode}): {results['total_users']} scanned, "
+            f"{results['duplicate_groups']} dupes, "
+            f"{results['users_merged']} merged, "
+            f"{results['assets_reassigned']} reassigned, "
+            f"{results['users_deleted']} deleted, "
+            f"{results['junk_removed']} junk, "
+            f"{results['errors']} errors"
+        )
 
     def close(self) -> None:
         """Clean up resources."""

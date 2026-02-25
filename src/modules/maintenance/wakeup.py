@@ -246,29 +246,17 @@ class WakeUpModule:
         
         mode = "DRY RUN" if dry_run else "LIVE RUN"
         
-        print("\n" + "=" * 60)
-        print(f"WAKE-UP MODULE - {mode} COMPLETE")
-        print("=" * 60)
-        print(f"Total computers:  {results['total']}")
-        print(f"Successful:       {results['successful']}")
-        print(f"Failed:           {results['failed']}")
-        if results.get("not_found"):
-            print(f"Not found:        {len(results['not_found'])}")
-        print("=" * 60 + "\n")
-        
-        # Show details for successful commands
-        if not dry_run and results["successful"] > 0:
-            print("Successfully sent wake-up commands to:")
-            for detail in results["details"]:
-                if detail["status"] == "success":
-                    print(f"  ✓ Computer {detail['computer_id']} (UUID: {detail.get('command_uuid', 'N/A')})")
-        
-        # Show failures
+        not_found = len(results.get("not_found", []))
+        logger.info(
+            f"Wake-Up ({mode}): {results['total']} total, "
+            f"{results['successful']} ok, "
+            f"{results['failed']} failed"
+            + (f", {not_found} not found" if not_found else "")
+        )
         if results["failed"] > 0:
-            print("\nFailed to send commands to:")
             for detail in results["details"]:
                 if detail["status"] == "failed":
-                    print(f"  ✗ Computer {detail['computer_id']}")
+                    logger.warning(f"  Failed: computer {detail['computer_id']}")
     
     def close(self) -> None:
         """Clean up resources."""

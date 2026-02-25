@@ -83,50 +83,42 @@ class ReconciliationModule:
         Returns:
             ReconciliationResults with all findings
         """
-        print("🔍 Starting Inventory Reconciliation...")
-        print("="*60)
-        
+        logger.info("Starting Inventory Reconciliation")
+
         # Fetch all devices from both systems
-        print("\n📥 Fetching Jamf Pro inventory...")
         jamf_devices = self._fetch_jamf_devices()
-        print(f"   Found {len(jamf_devices)} devices in Jamf Pro")
-        
-        print("\n📥 Fetching Snipe-IT inventory...")
+        logger.info(f"Jamf: {len(jamf_devices)} devices")
+
         snipe_assets = self._fetch_snipe_assets()
-        print(f"   Found {len(snipe_assets)} assets in Snipe-IT")
-        
+        logger.info(f"Snipe-IT: {len(snipe_assets)} assets")
+
         self.results.total_jamf = len(jamf_devices)
         self.results.total_snipe = len(snipe_assets)
-        
+
         # Build lookup dictionaries by serial number
         jamf_by_serial = self._build_serial_map(jamf_devices, 'serial_number')
         snipe_by_serial = self._build_serial_map(snipe_assets, 'serial')
-        
+
         # Find devices only in Jamf
-        print("\n🔎 Finding devices only in Jamf...")
         self._find_jamf_only(jamf_devices, snipe_by_serial)
-        
+
         # Find assets only in Snipe-IT
-        print("🔎 Finding assets only in Snipe-IT...")
         self._find_snipe_only(snipe_assets, jamf_by_serial)
-        
+
         # Find matched devices
-        print("🔎 Finding matched devices...")
         self._find_matched(jamf_devices, snipe_by_serial)
-        
+
         # Check for duplicates
         if check_duplicates:
-            print("🔎 Checking for duplicates...")
             self._find_duplicates(jamf_devices, snipe_assets)
-        
+
         # Check for data mismatches
         if check_mismatches:
-            print("🔎 Checking for data mismatches...")
             self._find_data_mismatches(jamf_by_serial, snipe_by_serial)
-        
+
         # Export to CSV if requested
         if export_csv:
-            print(f"\n📄 Exporting results to {output_dir}...")
+            logger.info(f"Exporting results to {output_dir}")
             self._export_csv(output_dir)
         
         return self.results
@@ -351,38 +343,20 @@ class ReconciliationModule:
     
     def print_summary(self):
         """Print a summary of reconciliation results."""
-        print("\n" + "="*60)
-        print("📊 RECONCILIATION SUMMARY")
-        print("="*60)
-        
-        print(f"\n📈 Total Inventory:")
-        print(f"   Jamf Pro:  {self.results.total_jamf} devices")
-        print(f"   Snipe-IT:  {self.results.total_snipe} assets")
-        print(f"   Matched:   {len(self.results.matched)} devices")
-        
-        print(f"\n⚠️  Discrepancies:")
-        print(f"   Only in Jamf:    {len(self.results.jamf_only)} devices")
-        print(f"   Only in Snipe:   {len(self.results.snipe_only)} assets")
-        
-        print(f"\n🔁 Duplicates:")
-        print(f"   Jamf duplicates:  {len(self.results.jamf_duplicates)} serial(s)")
-        print(f"   Snipe duplicates: {len(self.results.snipe_duplicates)} serial(s)")
-        
-        print(f"\n📝 Data Mismatches:")
-        print(f"   Devices with field mismatches: {len(self.results.data_mismatches)}")
-        
-        # Show some examples if any issues found
-        if self.results.jamf_only:
-            print(f"\n📋 Sample devices only in Jamf (first 5):")
-            for device in self.results.jamf_only[:5]:
-                print(f"   - {device['serial_number']}: {device['name']}")
-        
-        if self.results.snipe_only:
-            print(f"\n📋 Sample assets only in Snipe-IT (first 5):")
-            for asset in self.results.snipe_only[:5]:
-                print(f"   - {asset['serial']}: {asset['name']} ({asset['asset_tag']})")
-        
-        print("\n" + "="*60)
+        r = self.results
+        logger.info(
+            f"Reconciliation: Jamf={r.total_jamf}, Snipe={r.total_snipe}, "
+            f"matched={len(r.matched)}, "
+            f"Jamf-only={len(r.jamf_only)}, Snipe-only={len(r.snipe_only)}, "
+            f"dupes={len(r.jamf_duplicates)}+{len(r.snipe_duplicates)}, "
+            f"mismatches={len(r.data_mismatches)}"
+        )
+        if r.jamf_only:
+            for device in r.jamf_only[:5]:
+                logger.info(f"  Jamf-only: {device['serial_number']}: {device['name']}")
+        if r.snipe_only:
+            for asset in r.snipe_only[:5]:
+                logger.info(f"  Snipe-only: {asset['serial']}: {asset['name']}")
     
     def get_summary_dict(self) -> Dict:
         """Get summary as a dictionary (useful for API responses)."""

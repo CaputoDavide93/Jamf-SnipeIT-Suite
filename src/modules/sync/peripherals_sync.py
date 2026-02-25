@@ -124,9 +124,7 @@ class PeripheralsSyncModule:
         if dry_run is None:
             dry_run = self.dry_run
 
-        logger.info("=" * 60)
         logger.info(f"Peripherals Sync — {'DRY RUN' if dry_run else 'LIVE'}")
-        logger.info("=" * 60)
 
         # ------ Step 1: HiBob extraction ------
         logger.info("[1/5] Extracting equipment data from HiBob …")
@@ -294,7 +292,7 @@ class PeripheralsSyncModule:
             )
             if ok:
                 success_count += 1
-                logger.debug(f"  ✅ {co['accessory_name']} → {co['user_name']}")
+                logger.debug(f"  OK: {co['accessory_name']} -> {co['user_name']}")
                 self.audit.write(
                     action="accessory_checkout",
                     accessory_name=co["accessory_name"],
@@ -306,7 +304,7 @@ class PeripheralsSyncModule:
                 )
             else:
                 fail_count += 1
-                logger.warning(f"  ❌ {co['accessory_name']} → {co['user_name']}")
+                logger.warning(f"  FAIL: {co['accessory_name']} -> {co['user_name']}")
 
             # Batch pause
             if (i + 1) % self.batch_size == 0 and (i + 1) < len(planned):
@@ -348,17 +346,15 @@ class PeripheralsSyncModule:
 
     @staticmethod
     def _print_summary(s: Dict, dry_run: bool) -> None:
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info(f"  Peripherals Sync — Summary{' (DRY RUN)' if dry_run else ''}")
-        logger.info("=" * 60)
-        logger.info(f"  Employees with equipment:  {s['employees_with_equipment']}")
-        logger.info(f"  Accessories created:       {s['accessories_created']}")
-        logger.info(f"  Checkouts successful:      {s['checkouts_successful']}")
-        logger.info(f"  Checkouts failed:          {s['checkouts_failed']}")
-        logger.info(f"  Already checked out:       {s['already_checked_out']}")
-        logger.info(f"  Users not in Snipe-IT:     {s['users_not_found']}")
-        logger.info("=" * 60)
+        mode = "DRY RUN" if dry_run else "LIVE"
+        logger.info(
+            f"Peripherals Sync ({mode}): {s['employees_with_equipment']} employees, "
+            f"{s['accessories_created']} created, "
+            f"{s['checkouts_successful']} checked out, "
+            f"{s['checkouts_failed']} failed, "
+            f"{s['already_checked_out']} existing, "
+            f"{s['users_not_found']} users not found"
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle

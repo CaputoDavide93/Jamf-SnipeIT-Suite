@@ -46,6 +46,12 @@ output/
 .DS_Store
 Thumbs.db
 
+# Git
+.git/
+
+# Claude
+.claude/
+
 # Docker
 .docker/
 

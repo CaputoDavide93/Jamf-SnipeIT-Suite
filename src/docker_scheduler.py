@@ -88,16 +88,8 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None):
 
 def print_banner():
     """Print startup banner."""
-    banner = """
-╔═══════════════════════════════════════════════════════════════╗
-║              Jamf-SnipeIT Suite - Docker Mode                 ║
-║         Automated Asset Management & Synchronization          ║
-╠═══════════════════════════════════════════════════════════════╣
-║  Type 'NOW' + Enter for on-demand menu                        ║
-║  Press Ctrl+C to stop                                         ║
-╚═══════════════════════════════════════════════════════════════╝
-"""
-    print(banner)
+    print("\n  Jamf-SnipeIT Suite — Docker Mode")
+    print("  Type NOW for on-demand menu | Ctrl+C to stop\n")
 
 
 def pre_flight_check() -> bool:
@@ -109,9 +101,7 @@ def pre_flight_check() -> bool:
     from clients.jamf import JamfClient
     from clients.azure import AzureClient
 
-    logger.info("┌──────────────────────────────────────────────────────────┐")
-    logger.info("│  🔍  Pre-flight API connectivity check                   │")
-    logger.info("└──────────────────────────────────────────────────────────┘")
+    logger.info("Pre-flight API check...")
     all_ok = True
 
     def _check_snipe():
@@ -158,20 +148,20 @@ def pre_flight_check() -> bool:
         try:
             ok = check_fn()
             if ok:
-                logger.info(f"   ✅ {name}: reachable")
+                logger.info(f"  {name}: OK")
             else:
-                logger.warning(f"   ⚠️  {name}: returned unexpected response")
+                logger.warning(f"  {name}: unexpected response")
                 all_ok = False
         except Exception as e:
-            logger.error(f"   ❌ {name}: unreachable — {e}")
+            logger.error(f"  {name}: unreachable — {e}")
             all_ok = False
             if slack:
                 slack.notify_error(name, str(e))
 
     if all_ok:
-        logger.info("   All APIs reachable ✓")
+        logger.info("All APIs reachable")
     else:
-        logger.warning("   Some APIs unreachable — modules may fail")
+        logger.warning("Some APIs unreachable — modules may fail")
 
     return all_ok
 
@@ -184,13 +174,13 @@ def check_config_reload():
         if cfg_path.exists():
             mtime = cfg_path.stat().st_mtime
             if mtime > _config_mtime and _config_mtime > 0:
-                logger.info("🔄 Config file changed — reloading...")
+                logger.info("Config changed — reloading")
                 new_cfg = reload_config()
                 if new_cfg:
                     config = new_cfg
-                    logger.info("✅ Configuration reloaded")
+                    logger.info("Config reloaded")
                 else:
-                    logger.warning("⚠️  Config reload returned None, keeping old config")
+                    logger.warning("Config reload returned None, keeping old")
             _config_mtime = mtime
     except Exception as e:
         logger.debug(f"Config reload check failed: {e}")
@@ -205,28 +195,31 @@ def run_module_safe(name: str, runner_fn, dry_run: bool = False,
     Returns:
         Dict with 'success', 'error', and 'results' keys
     """
-    logger.info(f"")
-    logger.info(f"┌{'─'*58}┐")
-    logger.info(f"│  ▶  {name:<52} │")
-    logger.info(f"└{'─'*58}┘")
+    logger.info(f"--- {name} started ---")
 
     if ctx:
         ctx.start_module(name)
 
+    health = get_health_server()
+
     try:
         results = runner_fn(dry_run=dry_run)
-        logger.info(f"  ✅  {name} completed")
+        logger.info(f"--- {name} completed ---")
         if ctx:
             ctx.stop_module(name, results=results if isinstance(results, dict) else None)
         if sync_state:
             sync_state.set_last_run(name)
+        if health:
+            health.record_run(success=True, module_name=name)
         return {'success': True, 'error': None, 'results': results}
     except Exception as e:
-        logger.error(f"  ❌  {name} failed: {e}")
-        logger.exception("Full traceback:")
+        logger.error(f"--- {name} FAILED: {e} ---")
+        logger.exception("Traceback:")
         if ctx:
             ctx.record_error(name, e)
             ctx.stop_module(name)
+        if health:
+            health.record_run(success=False, module_name=name)
         if slack:
             slack.notify_error(name, str(e))
         return {'success': False, 'error': str(e), 'results': None}
@@ -338,14 +331,8 @@ def run_all_modules_startup(dry_run: bool = False):
     Run all modules on startup with RunContext for shared data and metrics.
     Continue even if one fails, report results at end.
     """
-    logger.info("")
-    logger.info("╔" + "═"*58 + "╗")
-    if dry_run:
-        logger.info("║  🚀  STARTUP — Running all modules (DRY RUN)" + " "*12 + "║")
-    else:
-        logger.info("║  🚀  STARTUP — Running all modules" + " "*22 + "║")
-    logger.info("╚" + "═"*58 + "╝")
-    logger.info("")
+    mode = "DRY RUN" if dry_run else "LIVE"
+    logger.info(f"=== STARTUP RUN ({mode}) ===")
 
     # Pre-flight connectivity check
     pre_flight_check()
@@ -368,40 +355,23 @@ def run_all_modules_startup(dry_run: bool = False):
         results[name] = run_module_safe(name, runner, dry_run=dry_run, ctx=ctx)
         time.sleep(2)  # Small delay between modules
 
-    # Print summary
-    logger.info("")
-    logger.info("╔" + "═"*58 + "╗")
-    logger.info("║  📊  RUN COMPLETE — SUMMARY" + " "*29 + "║")
-    logger.info("╠" + "═"*58 + "╣")
+    # Summary
+    success_count = sum(1 for r in results.values() if r['success'])
+    fail_count = len(results) - success_count
 
-    success_count = 0
-    fail_count = 0
+    logger.info("=== RUN SUMMARY: %d succeeded, %d failed ===", success_count, fail_count)
 
     for name, result in results.items():
-        if result['success']:
-            logger.info(f"║  ✅  {name:<52}║")
-            success_count += 1
-        else:
-            logger.error(f"║  ❌  {name:<40} FAILED  ║")
-            fail_count += 1
+        status = "OK" if result['success'] else "FAILED"
+        logger.info(f"  {name}: {status}")
 
-    logger.info("╠" + "═"*58 + "╣")
-    logger.info(f"║  Result: {success_count} succeeded, {fail_count} failed" + " "*max(0, 58 - 12 - len(str(success_count)) - len(str(fail_count)) - 21) + "║")
-
-    # Log module execution metrics
     summary = ctx.summary()
     if summary and summary.get("modules"):
-        logger.info("╠" + "═"*58 + "╣")
-        logger.info("║  ⏱  Module Timings" + " "*38 + "║")
-        logger.info("╟" + "─"*58 + "╢")
         for mod_name, mod_data in summary["modules"].items():
             dur = mod_data.get("duration_s", 0)
             processed = mod_data.get("processed", 0)
-            line = f"{mod_name}: {dur:.0f}s ({processed} items)"
-            logger.info(f"║  {line:<56}║")
-
-    logger.info("╚" + "═"*58 + "╝")
-    logger.info("")
+            if dur > 0 or processed > 0:
+                logger.info(f"  {mod_name}: {dur:.0f}s, {processed} items")
 
     # Slack run summary
     if slack and config.slack.notify_module_summary:
@@ -436,16 +406,15 @@ def print_next_run_times():
     jobs = get_next_run_times()
     
     if not jobs:
-        logger.info("📅 No jobs scheduled")
+        logger.info("No jobs scheduled")
         return
-    
-    logger.info("")
-    logger.info("📅 Next scheduled runs:")
+
+    logger.info("Next scheduled runs:")
     for job in jobs:
         time_until = job['next_run'] - datetime.now(job['next_run'].tzinfo)
         hours, remainder = divmod(int(time_until.total_seconds()), 3600)
         minutes, _ = divmod(remainder, 60)
-        
+
         if hours > 24:
             days = hours // 24
             hours = hours % 24
@@ -454,9 +423,8 @@ def print_next_run_times():
             time_str = f"in {hours}h {minutes}m"
         else:
             time_str = f"in {minutes}m"
-        
-        logger.info(f"   • {job['name']}: {job['next_run_str']} ({time_str})")
-    logger.info("")
+
+        logger.info(f"  {job['name']}: {job['next_run_str']} ({time_str})")
 
 
 def on_demand_menu():
@@ -594,7 +562,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             id='leavers',
             name='Leavers Module'
         )
-        logger.info(f"  ✓ Leavers scheduled: {cron}")
+        logger.info(f"  Leavers: {cron}")
     
     # Add Snipe-to-Jamf job
     if jobs_config.get('snipe_to_jamf', {}).get('enabled', False):
@@ -605,7 +573,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             id='snipe_to_jamf',
             name='Snipe-to-Jamf Sync'
         )
-        logger.info(f"  ✓ Snipe-to-Jamf scheduled: {cron}")
+        logger.info(f"  Snipe-to-Jamf: {cron}")
     
     # Add User Match job
     if jobs_config.get('user_match', {}).get('enabled', False):
@@ -616,7 +584,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             id='user_match',
             name='User Match Module'
         )
-        logger.info(f"  ✓ User Match scheduled: {cron}")
+        logger.info(f"  User Match: {cron}")
     
     # Add Model Sync job
     if jobs_config.get('model_sync', {}).get('enabled', False):
@@ -627,7 +595,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             id='model_sync',
             name='Model Sync Module'
         )
-        logger.info(f"  ✓ Model Sync scheduled: {cron}")
+        logger.info(f"  Model Sync: {cron}")
     
     # Add Azure Starters job
     if jobs_config.get('azure_starters', {}).get('enabled', False):
@@ -638,7 +606,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             id='azure_starters',
             name='Azure Starters Module'
         )
-        logger.info(f"  ✓ Azure Starters scheduled: {cron}")
+        logger.info(f"  Azure Starters: {cron}")
     
     # Add Correction job
     if jobs_config.get('correction', {}).get('enabled', False):
@@ -649,7 +617,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             id='correction',
             name='Self-Healing Correction'
         )
-        logger.info(f"  ✓ Correction scheduled: {cron}")
+        logger.info(f"  Correction: {cron}")
 
     # Add Cleanup / Duplicate Detection job
     if jobs_config.get('cleanup', {}).get('enabled', False):
@@ -660,7 +628,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             id='cleanup',
             name='Cleanup & Duplicate Detection'
         )
-        logger.info(f"  ✓ Cleanup scheduled: {cron}")
+        logger.info(f"  Cleanup: {cron}")
 
     # Add User Enrichment job
     if jobs_config.get('user_enrichment', {}).get('enabled', False):
@@ -671,7 +639,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             id='user_enrichment',
             name='User Enrichment Module'
         )
-        logger.info(f"  ✓ User Enrichment scheduled: {cron}")
+        logger.info(f"  User Enrichment: {cron}")
 
     # Add Peripherals Sync job (HiBob → Snipe-IT accessories)
     if jobs_config.get('peripherals_sync', {}).get('enabled', False):
@@ -682,7 +650,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             id='peripherals_sync',
             name='Peripherals Sync (HiBob)'
         )
-        logger.info(f"  ✓ Peripherals Sync scheduled: {cron}")
+        logger.info(f"  Peripherals Sync: {cron}")
     
     return scheduler
 
@@ -690,7 +658,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
 def signal_handler(signum, frame):
     """Handle shutdown signals."""
     global running
-    logger.info("\n⚠️  Shutdown signal received...")
+    logger.info("Shutdown signal received")
     running = False
     if scheduler:
         scheduler.shutdown(wait=False)
@@ -722,16 +690,16 @@ def main():
     
     # Load config
     try:
-        logger.info(f"📁 Loading configuration from: {args.config}")
+        logger.info(f"Loading config: {args.config}")
         config = get_config(args.config)
-        
+
         # Setup logging from config
         log_level = config.logging.level if hasattr(config, 'logging') else 'INFO'
         setup_logging(level=log_level, log_file=args.log_file)
-        
-        logger.info("✅ Configuration loaded successfully")
+
+        logger.info("Config loaded")
     except Exception as e:
-        print(f"❌ Failed to load configuration: {e}")
+        print(f"FATAL: Failed to load configuration: {e}")
         return 1
 
     # Track config file mtime for hot-reload
@@ -746,21 +714,20 @@ def main():
             channel_id=config.slack.channel_id,
             enabled=True,
         )
-        logger.info("✅ Slack notifications enabled")
+        logger.info("Slack: enabled")
     else:
-        logger.info("ℹ️  Slack notifications disabled")
+        logger.info("Slack: disabled")
 
     # Initialise persistent state helpers
     sync_state = SyncState()
     retry_queue = RetryQueue()
-    logger.info("✅ SyncState & RetryQueue initialised")
 
     # Start health server
     try:
         health_server = start_health_server(port=8080)
-        logger.info("✅ Health server started on :8080")
+        logger.info("Health server: :8080")
     except Exception as e:
-        logger.warning(f"⚠️  Health server failed to start: {e}")
+        logger.warning(f"Health server failed: {e}")
     
     # Check if scheduler is enabled in config
     scheduler_cfg = config.scheduler if hasattr(config, 'scheduler') else {}
@@ -771,7 +738,7 @@ def main():
     # Check for dry-run mode
     dry_run = args.dry_run
     if dry_run:
-        logger.info("🧪 DRY RUN MODE - No changes will be made to any systems")
+        logger.info("DRY RUN MODE — no changes will be made")
     
     # Run all modules on startup if configured
     run_on_startup = scheduler_cfg.get('run_on_startup', True) if isinstance(scheduler_cfg, dict) else getattr(scheduler_cfg, 'run_on_startup', True)
@@ -780,36 +747,33 @@ def main():
     
     # If scheduler disabled, exit after startup run
     if not scheduler_enabled:
-        logger.info("📅 Scheduler is disabled in configuration. Exiting.")
+        logger.info("Scheduler disabled — exiting")
         return 0
-    
+
     # Create and start scheduler
-    logger.info("")
-    logger.info("📅 Configuring scheduled jobs...")
+    logger.info("Configuring scheduled jobs...")
     
     try:
         sched = create_scheduler(config)
         
         jobs = sched.get_jobs()
         if not jobs:
-            logger.warning("⚠️  No jobs scheduled. Check config.yaml scheduler.jobs section.")
-            logger.info("   Scheduler will run but no automated tasks configured.")
-        
+            logger.warning("No jobs scheduled — check config.yaml scheduler.jobs")
+
         sched.start()
-        logger.info("")
-        logger.info("🚀 Scheduler started successfully!")
-        
+        logger.info("Scheduler started")
+
     except Exception as e:
-        logger.error(f"❌ Failed to start scheduler: {e}")
+        logger.error(f"Failed to start scheduler: {e}")
         return 1
-    
+
     # Print initial next run times
     print_next_run_times()
-    
-    logger.info("💡 Type 'NOW' + Enter for on-demand execution menu")
-    logger.info("💡 Type 'STATUS' + Enter to see next run times")
-    logger.info("💡 Press Ctrl+C to stop")
-    logger.info("")
+
+    # Update health server
+    health = get_health_server()
+    if health:
+        health.update_status(scheduler_running=True)
     
     # Start input listener thread
     input_thread = threading.Thread(target=input_listener, daemon=True)
@@ -834,10 +798,10 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        logger.info("\n⚠️  Shutting down scheduler...")
+        logger.info("Shutting down scheduler...")
         if scheduler:
             scheduler.shutdown(wait=False)
-        logger.info("👋 Goodbye!")
+        logger.info("Shutdown complete")
     
     return 0
 

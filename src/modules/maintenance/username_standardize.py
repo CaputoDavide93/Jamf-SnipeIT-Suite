@@ -99,16 +99,13 @@ class UsernameStandardizer:
     @staticmethod
     def _print_summary(results: Dict, dry_run: bool) -> None:
         mode = "DRY RUN" if dry_run else "LIVE RUN"
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info(f"  USERNAME STANDARDIZATION - {mode} COMPLETE")
-        logger.info("=" * 60)
-        logger.info(f"  Total users:        {results['total_users']}")
-        logger.info(f"  Already plain:      {results['already_plain']}")
-        logger.info(f"  Updated:            {results['updated']}")
-        logger.info(f"  Skipped:            {results['skipped']}")
-        logger.info(f"  Errors:             {results['errors']}")
-        logger.info("=" * 60)
+        logger.info(
+            f"Username Standardize ({mode}): {results['total_users']} total, "
+            f"{results['already_plain']} plain, "
+            f"{results['updated']} updated, "
+            f"{results['skipped']} skipped, "
+            f"{results['errors']} errors"
+        )
 
     def close(self) -> None:
         self.snipe.close()

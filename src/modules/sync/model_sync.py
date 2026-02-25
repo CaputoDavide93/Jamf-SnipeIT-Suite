@@ -262,15 +262,12 @@ class ModelSyncModule:
                 else:
                     results["errors"].append(f"Failed to create model: {model_name}")
         
-        # Print summary
-        print("\n" + "=" * 60)
-        print("MODEL PROVISIONING COMPLETE")
-        print("=" * 60)
-        print(f"Models checked:        {results['models_checked']}")
-        print(f"Models already exist:  {results['models_existing']}")
-        print(f"Models created:        {results['models_created']}")
-        print(f"Manufacturers created: {results['manufacturers_created']}")
-        print("=" * 60 + "\n")
+        logger.info(
+            f"Model provisioning: {results['models_checked']} checked, "
+            f"{results['models_existing']} exist, "
+            f"{results['models_created']} created, "
+            f"{results['manufacturers_created']} manufacturers"
+        )
         
         return results
     
@@ -413,14 +410,12 @@ class ModelSyncModule:
         
         mode = "DRY RUN" if dry_run else "LIVE RUN"
         
-        print("\n" + "=" * 60)
-        print(f"MODEL SYNC - {mode} COMPLETE")
-        print("=" * 60)
-        print(f"Total processed:  {results['total_processed']}")
-        print(f"Updated:          {results['updated']}")
-        print(f"Skipped:          {results['skipped']}")
-        print(f"Errors:           {results['errors']}")
-        print("=" * 60 + "\n")
+        logger.info(
+            f"Model Sync ({mode}): {results['total_processed']} processed, "
+            f"{results['updated']} updated, "
+            f"{results['skipped']} skipped, "
+            f"{results['errors']} errors"
+        )
     
     def close(self) -> None:
         """Clean up resources."""

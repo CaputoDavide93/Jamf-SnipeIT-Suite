@@ -162,17 +162,15 @@ class UserEnrichmentModule:
     @staticmethod
     def _print_summary(results: Dict, dry_run: bool) -> None:
         mode = "DRY RUN" if dry_run else "LIVE RUN"
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info(f"  USER ENRICHMENT - {mode} COMPLETE")
-        logger.info("=" * 60)
-        logger.info(f"  Total users:        {results['total_users']}")
-        logger.info(f"  Enriched:           {results['enriched']}")
-        logger.info(f"  Already complete:   {results['already_complete']}")
-        logger.info(f"  No Azure match:     {results['no_azure_match']}")
-        logger.info(f"  Skipped disabled:   {results['skipped_disabled']}")
-        logger.info(f"  Errors:             {results['errors']}")
-        logger.info("=" * 60)
+        logger.info(
+            f"User Enrichment ({mode}): "
+            f"{results['total_users']} total, "
+            f"{results['enriched']} enriched, "
+            f"{results['already_complete']} complete, "
+            f"{results['no_azure_match']} no match, "
+            f"{results['skipped_disabled']} disabled, "
+            f"{results['errors']} errors"
+        )
 
     def close(self) -> None:
         self.azure.close()

@@ -331,14 +331,12 @@ class SnipeToJamfModule:
         
         mode = "DRY RUN" if dry_run else "LIVE RUN"
         
-        print("\n" + "=" * 60)
-        print(f"SNIPE→JAMF SYNC - {mode} COMPLETE")
-        print("=" * 60)
-        print(f"Total processed:  {results['total_processed']}")
-        print(f"Updated:          {results['updated']}")
-        print(f"Skipped:          {results['skipped']}")
-        print(f"Errors:           {results['errors']}")
-        print("=" * 60 + "\n")
+        logger.info(
+            f"Snipe-to-Jamf ({mode}): {results['total_processed']} processed, "
+            f"{results['updated']} updated, "
+            f"{results['skipped']} skipped, "
+            f"{results['errors']} errors"
+        )
     
     def close(self) -> None:
         """Clean up resources."""
