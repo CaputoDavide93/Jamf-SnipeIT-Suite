@@ -1,10 +1,11 @@
 """
 Jamf-SnipeIT Suite - Snipe-IT to Jamf Sync Module
-Syncs user information FROM Snipe-IT TO Jamf (reverse direction).
+Writes the Snipe-IT asset ID back to each Jamf computer as an Extension Attribute.
 
-IMPORTANT: Jamf local users are the source of truth. This module only
-enriches Jamf location fields with Snipe-IT user data (email, name, job title)
-when the Snipe-IT assigned user matches the Jamf local user.
+IMPORTANT: Jamf is the source of truth for user identity (username, full name,
+email). This module NEVER writes to Jamf location fields — it only sets the
+SnipeIT_Asset_ID EA so Jamf knows which Snipe-IT asset record corresponds to
+each computer.
 """
 import logging
 import time
@@ -15,7 +16,6 @@ from clients.jamf import JamfClient
 from clients.snipeit import SnipeITClient
 from infra.progress import ProgressTracker
 from infra.helpers import rate_limit_delay
-from matching.user_matcher import UserMatcher, pick_primary_local_identity
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +59,8 @@ class SnipeToJamfModule:
             rate_limit_wait=config.api.rate_limit_wait_seconds,
         )
         
-        # Cache for bulk-fetched data
-        self._user_matcher: Optional[UserMatcher] = None
+        # Pre-built serial→asset map for bulk lookup
+        self._serial_map: Optional[Dict[str, Dict]] = None
     
     def run(
         self,
@@ -168,163 +168,79 @@ class SnipeToJamfModule:
     
     def _sync_single_computer(self, serial: str, dry_run: bool) -> bool:
         """
-        Sync user info for a single computer.
-        
-        IMPORTANT: Jamf local users are the source of truth.
-        We only update Jamf if the Snipe-IT assigned user matches
-        the Jamf local user, to enrich with email/name/job title.
-        
-        SAFETY: Skip update if Jamf already has an email set (to avoid
-        overwriting with a potentially worse fuzzy match).
-        
+        Write the Snipe-IT asset ID to the Jamf EA for a single computer.
+
+        This module NEVER touches Jamf location/identity fields (username,
+        real_name, email, position). Jamf is the source of truth for those.
+
         Args:
             serial: Computer serial number
             dry_run: If True, don't make changes
-        
+
         Returns:
-            True if updated
+            True if the EA was updated
         """
-        # First, get Jamf computer to check local user (source of truth)
+        # Lazy-load the serial→asset map (one bulk call, reused for all computers)
+        if self._serial_map is None:
+            logger.info("Building Snipe-IT serial → asset map...")
+            self._serial_map = self.snipe.get_assets_by_serial_map()
+            logger.info(f"Loaded {len(self._serial_map)} assets from Snipe-IT")
+
+        # Look up asset by serial
+        asset = self._serial_map.get(serial.upper())
+        if not asset:
+            logger.debug(f"[{serial}] No Snipe-IT asset found")
+            return False
+
+        asset_id = asset.get("id")
+        if not asset_id:
+            return False
+
+        # Look up Jamf computer to get its ID and current EA value
         jamf_computer = self.jamf.get_computer_by_serial(serial)
         if not jamf_computer:
-            logger.debug(f"No Jamf computer for serial: {serial}")
+            logger.debug(f"[{serial}] Not found in Jamf")
             return False
-        
-        jamf_id = jamf_computer.get("general", {}).get("id")
+
+        jamf_id = (jamf_computer.get("general") or {}).get("id")
         if not jamf_id:
-            logger.error(f"Could not get Jamf ID for serial: {serial}")
             return False
-        
-        # Check current Jamf location data - skip if already populated
-        jamf_location = jamf_computer.get("location", {}) or {}
-        current_email = (jamf_location.get("email_address") or "").strip()
-        current_realname = (jamf_location.get("real_name") or "").strip()
-        
-        # If Jamf already has email set, skip — User Match already populated this
-        if current_email:
-            logger.debug(f"Jamf already has email '{current_email}' for serial {serial}, skipping")
-            return False
-        
-        # Get Jamf local user (source of truth)
-        groups_accounts = jamf_computer.get("groups_accounts", {}) or {}
-        local_users = (
-            groups_accounts.get("local_accounts")
-            or groups_accounts.get("local_users")
-            or groups_accounts.get("users")
-            or []
-        )
-        if isinstance(local_users, dict) and "user" in local_users:
-            local_users = local_users["user"]
-        elif isinstance(local_users, dict):
-            local_users = [local_users]
-        elif not isinstance(local_users, list):
-            local_users = []
-        
-        jamf_username, jamf_fullname = pick_primary_local_identity(
-            local_users,
-            skip_usernames=[u.lower() for u in self.config.matching.skip_usernames],
-            location=jamf_computer.get("location"),
-        )
-        
-        if not jamf_username:
-            logger.debug(f"No primary local user in Jamf for serial: {serial}")
-            return False
-        
-        logger.debug(f"Jamf local user (source of truth): {jamf_username}, full name: {jamf_fullname}")
-        
-        # Check if this is a generic/shared username that should be skipped
-        skip_usernames = [u.lower() for u in self.config.matching.skip_usernames]
-        if jamf_username.lower() in skip_usernames:
-            logger.debug(f"Skipping generic/shared Jamf user: {jamf_username}")
-            return False
-        
-        # JAMF IS SOURCE OF TRUTH: Look up the Jamf local user in Snipe-IT
-        # Use UserMatcher to try full name first, then username, then fuzzy match
-        if self._user_matcher is None:
-            logger.debug("Loading Snipe-IT users for matching...")
-            users = self.snipe.get_all_users()
-            self._user_matcher = UserMatcher(
-                users=users,
-                email_domain=self.config.matching.email_domain,
-                min_score=self.config.matching.min_score,
-                weight_lcs=self.config.matching.weight_lcs,
-                weight_char_overlap=self.config.matching.weight_char_overlap,
-                weight_bigram_dice=self.config.matching.weight_bigram_dice,
-                use_bigram_dice=self.config.matching.use_bigram_dice,
-            )
-            logger.debug(f"Loaded {len(users)} users for matching")
-        
-        snipe_user, debug_info = self._user_matcher.best_match(
-            full_name_hint=jamf_fullname or "",
-            username=jamf_username,
-        )
-        
-        if debug_info.get("exact_hit_reason"):
-            logger.debug(f"Match reason: {debug_info['exact_hit_reason']}")
-        
-        # If match was rejected due to ambiguity, don't update
-        if debug_info.get("rejected_reason"):
-            logger.debug(f"Match rejected ({debug_info['rejected_reason']}) for Jamf user '{jamf_username}', serial {serial}")
-            return False
-        
-        if not snipe_user:
-            logger.debug(f"No Snipe-IT user found matching Jamf user '{jamf_username}' (full name: '{jamf_fullname}') for {serial}")
-            return False
-        
-        # Extract user info from Snipe-IT
-        username = snipe_user.get("username", "")
-        full_name = snipe_user.get("name", "")
-        first_name = snipe_user.get("first_name", "")
-        email = snipe_user.get("email", "")
-        
-        # Check if this is a disabled user (name starts with [Disabled])
-        if full_name.startswith("[Disabled]") or first_name.startswith("[Disabled]"):
-            logger.debug(f"Skipping disabled Snipe-IT user: {full_name or first_name} ({serial})")
-            return False
-        
-        logger.debug(f"Found Snipe-IT user: {username} ({full_name}) for Jamf user: {jamf_username}")
-        
-        # Job title handling
-        job_title = (
-            snipe_user.get("jobtitle")
-            or snipe_user.get("job_title")
-            or snipe_user.get("title")
-            or ""
-        )
-        
-        # Department handling
-        department = snipe_user.get("department")
-        if isinstance(department, dict):
-            department = department.get("name", "")
-        else:
-            department = department or ""
-        
-        logger.debug(f"Snipe-IT user: {username}, {full_name}, {email}")
-        
-        # Update Jamf
+
+        # Check if EA already has the correct value (skip unnecessary writes)
+        ea_name = self.config.jamf.ea_snipe_asset_id
+        ext_attrs = jamf_computer.get("extension_attributes") or []
+        for ea in ext_attrs:
+            if ea.get("name") == ea_name and str(ea.get("value", "")).strip() == str(asset_id):
+                logger.debug(f"[{serial}] EA already set to {asset_id}")
+                return False
+
         if dry_run:
-            logger.info(
-                f"[DRY-RUN] Would update Jamf computer {jamf_id}: "
-                f"username={username}, name={full_name}, email={email}"
-            )
+            logger.info(f"[DRY-RUN] Would set {ea_name}={asset_id} on Jamf computer {jamf_id} ({serial})")
             return True
-        
-        success = self.jamf.update_computer_location(
-            computer_id=jamf_id,
-            username=username,
-            realname=full_name,
-            email=email,
-            position=job_title,
-            department=department,
-            dry_run=False,
+
+        # Write ONLY the EA — do not touch location fields
+        from clients.jamf import safe_xml_text
+        xml = f"""<computer>
+  <extension_attributes>
+    <extension_attribute>
+      <name>{safe_xml_text(ea_name)}</name>
+      <value>{safe_xml_text(str(asset_id))}</value>
+    </extension_attribute>
+  </extension_attributes>
+</computer>"""
+
+        response = self.jamf._request(
+            "PUT",
+            f"/JSSResource/computers/id/{jamf_id}",
+            xml_data=xml.encode("utf-8"),
         )
-        
-        if success:
-            logger.debug(f"Updated Jamf computer {jamf_id} with user: {username}")
+
+        if response and response.status_code in (200, 201):
+            logger.info(f"[{serial}] Set {ea_name}={asset_id} on Jamf computer {jamf_id}")
             return True
-        else:
-            logger.error(f"Failed to update Jamf computer {jamf_id}")
-            return False
+
+        logger.error(f"[{serial}] Failed to set EA on Jamf computer {jamf_id}")
+        return False
     
     def _print_summary(self, results: Dict[str, Any], dry_run: bool) -> None:
         """Print processing summary."""

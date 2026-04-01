@@ -6,6 +6,7 @@ Finds discrepancies between Jamf Pro and Snipe-IT inventories.
 - Duplicate detection in both systems
 """
 import csv
+import logging
 import os
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
@@ -13,6 +14,8 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 
 from core.config import Config
+
+logger = logging.getLogger(__name__)
 from clients.jamf import JamfClient
 from clients.snipeit import SnipeITClient
 
@@ -179,7 +182,7 @@ class ReconciliationModule:
             if serial and serial not in snipe_by_serial:
                 self.results.jamf_only.append(device)
         
-        print(f"   Found {len(self.results.jamf_only)} devices only in Jamf")
+        logger.info(f"  Found {len(self.results.jamf_only)} devices only in Jamf")
     
     def _find_snipe_only(self, snipe_assets: List[Dict], jamf_by_serial: Dict[str, List[Dict]]):
         """Find assets that exist in Snipe-IT but not in Jamf."""
@@ -188,7 +191,7 @@ class ReconciliationModule:
             if serial and serial not in jamf_by_serial:
                 self.results.snipe_only.append(asset)
         
-        print(f"   Found {len(self.results.snipe_only)} assets only in Snipe-IT")
+        logger.info(f"  Found {len(self.results.snipe_only)} assets only in Snipe-IT")
     
     def _find_matched(self, jamf_devices: List[Dict], snipe_by_serial: Dict[str, List[Dict]]):
         """Find devices that exist in both systems."""
@@ -205,7 +208,7 @@ class ReconciliationModule:
                     'snipe_asset_tag': snipe_device.get('asset_tag')
                 })
         
-        print(f"   Found {len(self.results.matched)} matched devices")
+        logger.info(f"  Found {len(self.results.matched)} matched devices")
     
     def _find_duplicates(self, jamf_devices: List[Dict], snipe_assets: List[Dict]):
         """Find duplicate serial numbers within each system."""
@@ -239,8 +242,8 @@ class ReconciliationModule:
                     'assets': [{'id': a['id'], 'name': a['name'], 'asset_tag': a['asset_tag']} for a in assets]
                 })
         
-        print(f"   Found {len(self.results.jamf_duplicates)} duplicate serials in Jamf")
-        print(f"   Found {len(self.results.snipe_duplicates)} duplicate serials in Snipe-IT")
+        logger.info(f"  Found {len(self.results.jamf_duplicates)} duplicate serials in Jamf")
+        logger.info(f"  Found {len(self.results.snipe_duplicates)} duplicate serials in Snipe-IT")
     
     def _find_data_mismatches(self, jamf_by_serial: Dict[str, List[Dict]], 
                                snipe_by_serial: Dict[str, List[Dict]]):
@@ -282,7 +285,7 @@ class ReconciliationModule:
                         'mismatches': mismatches
                     })
         
-        print(f"   Found {len(self.results.data_mismatches)} devices with data mismatches")
+        logger.info(f"  Found {len(self.results.data_mismatches)} devices with data mismatches")
     
     def _export_csv(self, output_dir: str):
         """Export reconciliation results to CSV files."""
@@ -297,7 +300,7 @@ class ReconciliationModule:
                 writer.writeheader()
                 for device in self.results.jamf_only:
                     writer.writerow({k: device.get(k, '') for k in ['id', 'name', 'serial_number', 'model', 'username']})
-            print(f"   Exported: {path}")
+            logger.info(f"  Exported: {path}")
         
         # Export Snipe-only assets
         if self.results.snipe_only:
@@ -307,7 +310,7 @@ class ReconciliationModule:
                 writer.writeheader()
                 for asset in self.results.snipe_only:
                     writer.writerow({k: asset.get(k, '') for k in ['id', 'asset_tag', 'name', 'serial', 'model', 'status']})
-            print(f"   Exported: {path}")
+            logger.info(f"  Exported: {path}")
         
         # Export duplicates
         if self.results.jamf_duplicates or self.results.snipe_duplicates:
@@ -321,7 +324,7 @@ class ReconciliationModule:
                 for dup in self.results.snipe_duplicates:
                     ids = ', '.join(str(a['id']) for a in dup['assets'])
                     writer.writerow(['snipeit', dup['serial'], dup['count'], ids])
-            print(f"   Exported: {path}")
+            logger.info(f"  Exported: {path}")
         
         # Export data mismatches
         if self.results.data_mismatches:
@@ -339,7 +342,7 @@ class ReconciliationModule:
                             m['jamf_value'],
                             m['snipe_value']
                         ])
-            print(f"   Exported: {path}")
+            logger.info(f"  Exported: {path}")
     
     def print_summary(self):
         """Print a summary of reconciliation results."""

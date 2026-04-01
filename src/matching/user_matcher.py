@@ -79,8 +79,10 @@ class UserMatcher:
         weight_char_overlap: float = 0.3,
         weight_bigram_dice: float = 2.0,
         use_bigram_dice: bool = True,
+        ai_resolver=None,
     ):
         self.email_domain = email_domain.lower().lstrip("@")
+        self.ai_resolver = ai_resolver
 
         # Collect ambiguous / rejected matches so callers can report them
         self.warnings: List[Dict[str, Any]] = []
@@ -171,6 +173,7 @@ class UserMatcher:
         self,
         full_name_hint: str = "",
         username: str = "",
+        original_email: str = "",
     ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
         """
         Priority: full name → email → email prefix → username → fuzzy.
@@ -186,9 +189,16 @@ class UserMatcher:
                 debug_info["exact_hit_reason"] = f"full_name={full_name_hint}"
                 return exact, debug_info
 
-        # PRIORITY 2: exact email
-        if username and self.email_domain:
+        # PRIORITY 2: exact email — prefer the original Jamf location email
+        # (e.g. "jane.doe@company.com") over reconstructing from the
+        # dot-stripped username ("janedoe@company.com") which never matches.
+        guessed_email = ""
+        if original_email:
+            guessed_email = original_email.lower().strip()
+        elif username and self.email_domain:
             guessed_email = f"{username.lower().strip()}@{self.email_domain}"
+
+        if guessed_email:
             exact = self.find_by_email(guessed_email)
             if exact:
                 if full_name_hint and not self._names_compatible(full_name_hint, exact.get("name", "")):
@@ -280,6 +290,27 @@ class UserMatcher:
                         f"second='{candidates[1][1].get('name')}' ({second_score:.1f}), "
                         f"margin={margin:.1%} < 20%"
                     )
+
+                    # Try AI resolver before giving up
+                    if self.ai_resolver:
+                        ai_candidates = [
+                            {"name": u.get("name"), "email": u.get("email"),
+                             "score": round(s, 2), "id": u.get("id")}
+                            for s, u in candidates[:5]
+                        ]
+                        ai_pick = self.ai_resolver.resolve_ambiguous_match(
+                            local_username=username,
+                            local_fullname=full_name_hint,
+                            candidates=ai_candidates,
+                        )
+                        if ai_pick:
+                            # Find the full user dict for the AI pick
+                            picked_id = ai_pick.get("id")
+                            for _s, u in candidates:
+                                if u.get("id") == picked_id:
+                                    debug_info["exact_hit_reason"] = f"ai_resolved (id={picked_id})"
+                                    return u, debug_info
+
                     debug_info["rejected_reason"] = "ambiguous_margin"
                     return None, debug_info
 
@@ -295,11 +326,25 @@ class UserMatcher:
             return True
         if na == nb:
             return True
-        words_a = set(na.split())
-        words_b = set(nb.split())
-        if words_a and words_b and (words_a & words_b):
-            return True
-        return bigram_dice_coefficient(na, nb) >= 0.4
+        words_a = na.split()
+        words_b = nb.split()
+        # Require surname (last word) overlap — a shared first name alone
+        # (e.g. "John Tough" vs "John Smith") is not enough to be compatible.
+        if len(words_a) >= 2 and len(words_b) >= 2:
+            if words_a[-1] == words_b[-1]:
+                return True
+            # Full-name match: both first AND last name present in the other
+            set_a = set(words_a)
+            set_b = set(words_b)
+            if len(set_a & set_b) >= 2:
+                return True
+        elif len(words_a) == 1 or len(words_b) == 1:
+            # Single-word name — allow if it matches any word in the other
+            set_a = set(words_a)
+            set_b = set(words_b)
+            if set_a & set_b:
+                return True
+        return bigram_dice_coefficient(na, nb) >= 0.65
 
 
 # =============================================================================
@@ -310,45 +355,37 @@ def pick_primary_local_identity(
     local_users: List[Dict[str, Any]],
     skip_usernames: Optional[List[str]] = None,
     location: Optional[Dict[str, Any]] = None,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Pick the primary local user from Jamf local accounts.
 
-    Priority:
-      1. Jamf *location* email / username (assigned user — most reliable).
-      2. Highest-scoring non-system local account.
+    IMPORTANT: Jamf "User and Location" fields are NOT trusted — they may
+    contain stale data from old feedback loops.  The only reliable identity
+    source is the Local User Accounts list on the machine itself.
 
-    Scoring heuristics for local accounts:
+    We skip well-known admin / service accounts (Admin, and any configured
+    in skip_usernames) and score the remaining accounts:
+
       +15  realname looks like a person name (>= 2 words, differs from username)
       +10  realname is present (even if single word)
-      +8   UID 501 – first real user created on macOS
       +5   home directory under /Users/
-      -3   administrator flag set (managed / service accounts)
+      -3   administrator flag set
 
-    Returns (username, full_name).
+    The `location` parameter is accepted for API compatibility but is ignored.
+
+    Returns (username, full_name, None).
+    The third element is always None (no email from local accounts).
     """
-
-    # --- 1. Try Jamf location (most reliable: manually assigned user) ---
-    if location:
-        loc_email = (location.get("email_address") or location.get("email") or "").strip()
-        loc_user = (location.get("username") or "").strip()
-        loc_name = (location.get("realname") or location.get("real_name") or "").strip()
-        if loc_email:
-            # Derive username from email (e.g. liam.brotchie@createfuture.com → liambrotchie)
-            prefix = loc_email.split("@")[0].replace(".", "").replace("-", "").replace("_", "")
-            # Try to find a matching local account for the full name
-            _name = _location_fullname(local_users, loc_email, loc_user) or loc_name
-            logger.debug(f"Location identity: email={loc_email}, derived_user={prefix}, name={_name}")
-            return prefix or loc_user, _name
-
-    # --- 2. Score local accounts ---
     if not local_users:
-        return None, None
+        return None, None, None
 
+    # ---- Accounts to always skip ----
     system_skip = {
-        "root", "daemon", "nobody", "guest", "_spotlight", "_mbsetupuser",
+        "root", "daemon", "nobody", "guest",
+        "_spotlight", "_mbsetupuser",
         "admin", "administrator", "jamfadmin",
+        # Additional org-specific accounts are added via skip_usernames config
     }
-    # Merge config-level skip usernames (e.g. "createfuture", "xdesign")
+    # Merge config-level skip usernames
     extra_skip = {u.lower() for u in (skip_usernames or [])}
     all_skip = system_skip | extra_skip
 
@@ -364,18 +401,13 @@ def pick_primary_local_identity(
 
         score = 0
 
-        # Person-name heuristic: "Liam Brotchie" >> "CreateFuture"
+        # Person-name heuristic: real person name scores higher than org name
         if full_name and " " in full_name and full_name.lower() != username.lower():
             score += 15
         elif full_name:
             score += 10
 
-        # UID 501 is almost always the real first user on macOS
-        uid = user.get("uid")
-        if uid is not None and str(uid) == "501":
-            score += 8
-
-        # Has a home directory under /Users/
+        # Has a home directory under /Users/ (real interactive user)
         if user.get("home") and "/Users/" in str(user.get("home", "")):
             score += 5
 
@@ -386,25 +418,9 @@ def pick_primary_local_identity(
         candidates.append((score, username, full_name))
 
     if not candidates:
-        return None, None
+        return None, None, None
 
     candidates.sort(key=lambda x: x[0], reverse=True)
     best = candidates[0]
-    return best[1], best[2]
-
-
-def _location_fullname(
-    local_users: List[Dict[str, Any]],
-    email: str,
-    loc_username: str,
-) -> Optional[str]:
-    """Try to find the full name from local accounts that matches a location email/username."""
-    email_prefix = email.split("@")[0].lower().replace(".", "").replace("-", "").replace("_", "")
-    for user in (local_users or []):
-        uname = (user.get("name") or user.get("username") or "").strip().lower()
-        realname = (user.get("realname") or user.get("real_name") or "").strip()
-        uname_norm = uname.replace(".", "").replace("-", "").replace("_", "")
-        if uname_norm == email_prefix or uname == loc_username.lower():
-            if realname and " " in realname:
-                return realname
-    return None
+    logger.debug(f"Primary local account: username={best[1]}, name={best[2]}, score={best[0]}")
+    return best[1], best[2], None

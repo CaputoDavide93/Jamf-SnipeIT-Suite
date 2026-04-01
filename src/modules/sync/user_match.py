@@ -4,6 +4,7 @@ Auto-provisions Snipe-IT assets from Jamf and matches users.
 """
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,8 +17,10 @@ from infra.audit_csv import AuditCSV
 from infra.progress import ProgressTracker
 from infra.helpers import rate_limit_delay
 from matching.user_matcher import UserMatcher, pick_primary_local_identity
+from matching.ai_resolver import AIResolver
 
 logger = logging.getLogger(__name__)
+
 
 
 class UserMatchModule:
@@ -95,6 +98,11 @@ class UserMatchModule:
         if self._user_matcher is None:
             logger.debug("Loading Snipe-IT users for matching...")
             users = self.snipe.get_all_users()
+
+            # Initialize AI resolver for ambiguous matches
+            ai_api_key = getattr(self.config, 'anthropic_api_key', '') or os.environ.get('ANTHROPIC_API_KEY', '')
+            ai_resolver = AIResolver(api_key=ai_api_key) if ai_api_key else None
+
             self._user_matcher = UserMatcher(
                 users=users,
                 email_domain=self.config.matching.email_domain,
@@ -103,6 +111,7 @@ class UserMatchModule:
                 weight_char_overlap=self.config.matching.weight_char_overlap,
                 weight_bigram_dice=self.config.matching.weight_bigram_dice,
                 use_bigram_dice=self.config.matching.use_bigram_dice,
+                ai_resolver=ai_resolver,
             )
             logger.debug(f"Loaded {len(users)} users for matching")
         return self._user_matcher
@@ -151,6 +160,7 @@ class UserMatchModule:
             "reassignments": 0,
             "skipped": 0,
             "errors": 0,
+            "unmatched_devices": [],
         }
         
         # Get computers from smart group
@@ -214,10 +224,18 @@ class UserMatchModule:
         # Send Slack notification for ambiguous matches so admin can fix them
         if self._user_matcher and self._user_matcher.warnings:
             self.slack.notify_matching_warnings(self._user_matcher.warnings)
-        
+
+        # Send Slack notification for unmatched devices
+        if results.get("unmatched_devices"):
+            self.slack.notify_investigation_needed(
+                channel_id=self.config.slack.channel_id,
+                title="User Match - Unmatched Devices",
+                items=results["unmatched_devices"],
+            )
+
         # Print summary
         self._print_summary(results, dry_run)
-        
+
         return results
     
     def _process_device(
@@ -267,16 +285,19 @@ class UserMatchModule:
         
         # Pick primary local user (pass config skip list + Jamf location data)
         skip_usernames = self.config.matching.skip_usernames
-        primary_username, full_name_hint = pick_primary_local_identity(
+        primary_username, full_name_hint, original_email = pick_primary_local_identity(
             local_users,
             skip_usernames=skip_usernames,
             location=location,
         )
-        logger.debug(f"Primary identity: username={primary_username}, name={full_name_hint}")
+        logger.debug(f"Primary identity: username={primary_username}, name={full_name_hint}, email={original_email}")
         
         if not primary_username:
             logger.warning(f"No primary user for device {comp_id}, skipping")
             results["skipped"] += 1
+            results["unmatched_devices"].append({
+                "description": f"`{serial}` *{hostname}* — No local user account (only admin/system accounts)"
+            })
             audit.write(
                 jamf_id=comp_id, serial=serial, hostname=hostname,
                 action="skip", result="skipped", notes="No primary username"
@@ -300,6 +321,7 @@ class UserMatchModule:
         user_match, debug_info = matcher.best_match(
             full_name_hint=full_name_hint or "",
             username=primary_username,
+            original_email=original_email or "",
         )
         
         snipe_user_id = user_match.get("id") if user_match else None
@@ -313,6 +335,15 @@ class UserMatchModule:
         # If match was rejected due to ambiguity, skip user operations for this device
         if debug_info.get("rejected_reason"):
             logger.warning(f"Match rejected ({debug_info['rejected_reason']}) for user '{primary_username}', device {comp_id}")
+            top = debug_info.get("top_candidates", [])
+            top_str = ", ".join(f"{c.get('name', '?')} ({c.get('score', 0)})" for c in top[:3])
+            results["unmatched_devices"].append({
+                "description": (
+                    f"`{serial}` *{hostname}*\n"
+                    f"      Local user: `{primary_username}` ({full_name_hint or 'no name'})\n"
+                    f"      Candidates: {top_str}"
+                )
+            })
             snipe_user_id = None
             snipe_email = None
             snipe_name = None
@@ -324,11 +355,19 @@ class UserMatchModule:
             snipe_user_id = None  # Don't checkout to this user
             snipe_email = None
             snipe_name = None
-        
+
         if snipe_user_id:
             logger.debug(f"Matched Snipe user: id={snipe_user_id}, email={snipe_email}")
-        else:
+        elif not debug_info.get("rejected_reason"):
+            # Not ambiguous, just no match found at all
             logger.debug("No confident Snipe user match")
+            results["unmatched_devices"].append({
+                "description": (
+                    f"`{serial}` *{hostname}*\n"
+                    f"      Local user: `{primary_username}` ({full_name_hint or 'no name'})\n"
+                    f"      No matching Snipe-IT user found"
+                )
+            })
         
         # Find or create asset
         asset = self.snipe.get_asset_by_serial(serial)
@@ -440,7 +479,7 @@ class UserMatchModule:
                 # Not assigned, checkout
                 action = "checkout"
                 if dry_run:
-                    logger.debug(f"[DRY-RUN] Would checkout asset {asset_id} to user {snipe_user_id}")
+                    logger.info(f"[DRY-RUN] Would checkout asset {asset_id} to user {snipe_user_id}")
                     results["checkouts"] += 1
                 else:
                     logger.debug(f"Checking out asset {asset_id} to user {snipe_user_id}")
@@ -452,40 +491,37 @@ class UserMatchModule:
                         logger.error(f"Checkout failed for asset {asset_id}")
                         results["errors"] += 1
         
-        # Update Jamf with EA - only update location fields if we have a valid Snipe user match
-        # This prevents overwriting good data with empty values
+        # Write back to Jamf:
+        #   - Asset ID EA (always, when we have an asset)
+        #   - Location fields ONLY when we have a confirmed Snipe-IT match
+        #     (this repairs poisoned Jamf location data with verified info
+        #      from Snipe-IT, which sources from Azure/HiBob)
         ea_name = self.config.jamf.ea_snipe_asset_id
-        
-        if snipe_user_id:
-            # We have a confident match — update Jamf with Snipe-IT user data + asset ID EA
-            update_username = primary_username if primary_username else location.get("username", "")
-            update_realname = snipe_name if snipe_name else location.get("real_name", "")
-            update_email = snipe_email if snipe_email else location.get("email_address", "")
-            update_position = location.get("position", "")
-            
-            self.jamf.update_computer_location_and_ea(
-                comp_id,
-                username=update_username,
-                realname=update_realname,
-                email=update_email,
-                position=update_position,
-                ea_name=ea_name,
-                ea_value=str(asset_id) if asset_id != "DRY-RUN" else "",
-                dry_run=dry_run,
-            )
-        elif asset_id and asset_id != "DRY-RUN":
-            # No user match, but we still need to set the asset ID EA
-            # Only update the EA, don't touch location fields (preserve existing data)
-            self.jamf.update_computer_location_and_ea(
-                comp_id,
-                username=location.get("username", ""),
-                realname=location.get("real_name", ""),
-                email=location.get("email_address", ""),
-                position=location.get("position", ""),
-                ea_name=ea_name,
-                ea_value=str(asset_id),
-                dry_run=dry_run,
-            )
+        if asset_id and asset_id != "DRY-RUN" and ea_name:
+            if snipe_user_id:
+                # Confident match — write verified Snipe-IT user data to Jamf
+                self.jamf.update_computer_location_and_ea(
+                    comp_id,
+                    username=primary_username or location.get("username", ""),
+                    realname=snipe_name or location.get("real_name", ""),
+                    email=snipe_email or location.get("email_address", ""),
+                    position=location.get("position", ""),
+                    ea_name=ea_name,
+                    ea_value=str(asset_id),
+                    dry_run=dry_run,
+                )
+            else:
+                # No match — only write the EA, preserve existing location
+                self.jamf.update_computer_location_and_ea(
+                    comp_id,
+                    username=location.get("username", ""),
+                    realname=location.get("real_name", ""),
+                    email=location.get("email_address", ""),
+                    position=location.get("position", ""),
+                    ea_name=ea_name,
+                    ea_value=str(asset_id),
+                    dry_run=dry_run,
+                )
         
         # Write audit record
         audit.write(

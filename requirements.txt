@@ -16,6 +16,9 @@ APScheduler>=3.10.0
 # Logging and utilities
 python-json-logger>=2.0.0
 
+# AI-powered matching (optional - for ambiguous user resolution)
+anthropic>=0.40.0
+
 # Development dependencies (optional)
 # pytest>=7.0.0
 # pytest-cov>=4.0.0

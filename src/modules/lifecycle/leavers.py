@@ -236,27 +236,22 @@ class LeaversModule:
             asset_name = asset.get("name") or asset.get("asset_tag") or asset_id
             
             if dry_run:
-                logger.info(f"[DRY-RUN] Would check-in and mark asset {asset_name} as pending")
+                logger.info(f"[DRY-RUN] Would mark asset {asset_name} as pending (keep assigned to leaver)")
                 results["updated_assets"] += 1
             else:
-                # Check in the asset first (release the assignment)
-                # so User Match won't see it as "still assigned to leaver"
-                assigned_user_id = self.snipe.get_assigned_user_id(current_asset) if current_asset else None
-                if assigned_user_id:
-                    checkin_ok = self.snipe.checkin_asset(
-                        asset_id,
-                        note=f"Auto check-in: user is in {group_type} group"
-                    )
-                    if not checkin_ok:
-                        logger.warning(f"Could not check-in asset {asset_name}, will still mark pending")
-                
-                # Now mark as pending
-                if self.snipe.update_asset_status(asset_id, pending_status_id):
-                    logger.info(f"Checked in and marked asset {asset_name} as pending")
-                    results["updated_assets"] += 1
-                    processed_asset_names.append(str(asset_name))
-                else:
-                    logger.error(f"Failed to update asset {asset_name}")
+                # Set status to Pending but DO NOT check in.
+                # The asset stays assigned to the leaver so it's clear who
+                # had it last. Pending status prevents User Match / Correction
+                # from touching it. The asset will be manually reassigned
+                # when the machine is collected and given to someone else.
+                status_ok = self.snipe.update_asset_status(asset_id, pending_status_id)
+                if not status_ok:
+                    logger.error(f"Failed to set pending status on asset {asset_name}")
+                    continue
+
+                logger.info(f"Marked asset {asset_name} as pending (still assigned to leaver)")
+                results["updated_assets"] += 1
+                processed_asset_names.append(str(asset_name))
         
         # Log disabled users with assets (notification removed — users are
         # disabled before they actually leave, so this is expected).
@@ -274,7 +269,7 @@ class LeaversModule:
     ) -> List[Dict[str, Any]]:
         """Get assets assigned to a user via the dedicated API endpoint."""
         
-        # Use direct user→assets endpoint (much more reliable than name search)
+        # Use direct user->assets endpoint (much more reliable than name search)
         assets = self.snipe.get_user_assets(user_id)
         
         if not assets:
@@ -299,7 +294,7 @@ class LeaversModule:
         new_name = f"[Disabled] {current_name}"
         
         if dry_run:
-            logger.info(f"[DRY-RUN] Would rename user {user_id}: {current_name} → {new_name}")
+            logger.info(f"[DRY-RUN] Would rename user {user_id}: {current_name} -> {new_name}")
             results["updated_user_names"] += 1
         else:
             update_data = {}
@@ -309,7 +304,7 @@ class LeaversModule:
                 update_data["name"] = new_name
             
             if self.snipe.update_user(user_id, update_data):
-                logger.info(f"Renamed user {user_id}: {current_name} → {new_name}")
+                logger.info(f"Renamed user {user_id}: {current_name} -> {new_name}")
                 results["updated_user_names"] += 1
     
     def _print_summary(self, results: Dict[str, Any], dry_run: bool) -> None:

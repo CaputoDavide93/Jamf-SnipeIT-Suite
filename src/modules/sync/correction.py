@@ -10,16 +10,20 @@ Runs BEFORE User Match on each execution to:
 5. Produce a detailed audit CSV of all corrections
 """
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.config import Config
 from clients.jamf import JamfClient
 from clients.snipeit import SnipeITClient
+from clients.slack import SlackClient
 from infra.audit_csv import AuditCSV
 from infra.progress import ProgressTracker
 from infra.helpers import rate_limit_delay
 from matching.user_matcher import UserMatcher, pick_primary_local_identity
+from matching.ai_resolver import AIResolver
+
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +61,13 @@ class CorrectionModule:
         )
 
         self._user_matcher: Optional[UserMatcher] = None
+
+        # Slack for investigation notifications
+        self.slack = SlackClient(
+            bot_token=config.slack.bot_token,
+            channel_id=config.slack.channel_id,
+            enabled=config.slack.enabled,
+        )
         # Cache for Jamf computer details (serial → dict), populated lazily
         self._jamf_cache: Dict[str, Optional[Dict]] = {}
 
@@ -183,9 +194,22 @@ class CorrectionModule:
         finally:
             audit.close()
         
-        progress.finish(extra=f"mismatches={results.get('mismatches', 0)}, corrected={results.get('corrected', 0)}, errors={results['errors']}")
+        progress.finish(extra=f"mismatches={results['mismatches_found']}, corrected={results['corrections_made']}, errors={results['errors']}")
 
         self._print_summary(results, dry_run)
+
+        # Send Slack notification for mismatches needing investigation
+        if results.get("details"):
+            mismatch_items = [
+                d for d in results["details"] if d.get("type") == "mismatch"
+            ]
+            if mismatch_items:
+                self.slack.notify_investigation_needed(
+                    channel_id=self.config.slack.channel_id,
+                    title="Correction - Assignment Mismatches Need Investigation",
+                    items=mismatch_items,
+                )
+
         return results
 
     # ------------------------------------------------------------------
@@ -197,6 +221,10 @@ class CorrectionModule:
         if self._user_matcher is None:
             logger.debug("Loading Snipe-IT users for correction matching...")
             users = self.snipe.get_all_users()
+
+            ai_api_key = getattr(self.config, 'anthropic_api_key', '') or os.environ.get('ANTHROPIC_API_KEY', '')
+            ai_resolver = AIResolver(api_key=ai_api_key) if ai_api_key else None
+
             self._user_matcher = UserMatcher(
                 users=users,
                 email_domain=self.config.matching.email_domain,
@@ -205,6 +233,7 @@ class CorrectionModule:
                 weight_char_overlap=self.config.matching.weight_char_overlap,
                 weight_bigram_dice=self.config.matching.weight_bigram_dice,
                 use_bigram_dice=self.config.matching.use_bigram_dice,
+                ai_resolver=ai_resolver,
             )
             logger.debug(f"Loaded {len(users)} users for correction matching")
         return self._user_matcher
@@ -258,7 +287,7 @@ class CorrectionModule:
         elif not isinstance(local_users, list):
             local_users = []
 
-        primary_username, full_name_hint = pick_primary_local_identity(
+        primary_username, full_name_hint, original_email = pick_primary_local_identity(
             local_users,
             skip_usernames=self.config.matching.skip_usernames,
             location=jamf_comp.get("location"),
@@ -280,6 +309,7 @@ class CorrectionModule:
         fresh_match, debug_info = matcher.best_match(
             full_name_hint=full_name_hint or "",
             username=primary_username,
+            original_email=original_email or "",
         )
 
         # Rejected due to ambiguity — can't validate
@@ -305,14 +335,36 @@ class CorrectionModule:
             )
             return
 
+        # ---- Safety: never reassign FROM an active user TO a disabled user ----
+        # This catches the common case where a machine was reassigned to a new
+        # person but the old (disabled) user's local account is still on it.
+        # e.g. Kerensa Martin (active) has the machine, but old local account
+        # "chrismartin" matches [Disabled] Chris Martin — leave Kerensa alone.
+        expected_is_disabled = expected_user_name.strip().startswith("[Disabled]")
+        current_is_disabled = current_user_name.strip().startswith("[Disabled]")
+
+        if expected_is_disabled and not current_is_disabled:
+            logger.info(
+                f"Asset {asset_id} ({serial}): local account '{primary_username}' "
+                f"matches disabled user '{expected_user_name}', but currently "
+                f"assigned to active user '{current_user_name}' — keeping current assignment"
+            )
+            results["correct_assignments"] += 1
+            return
+
         # ---- Mismatch detected ----
         results["mismatches_found"] += 1
-        logger.warning(
-            f"MISMATCH: Asset {asset_id} ({serial}) '{asset_name}' "
-            f"assigned to user {current_uid} ({current_user_name}) "
-            f"but should be user {expected_uid} ({expected_user_name}) "
-            f"[match: {match_reason}, jamf_user: {primary_username}]"
+        mismatch_desc = (
+            f"`{serial}` *{asset_name}*\n"
+            f"      Currently: *{current_user_name}*\n"
+            f"      Local account `{primary_username}` matches: *{expected_user_name}*\n"
+            f"      Match type: {match_reason}"
         )
+        logger.warning(f"MISMATCH: {mismatch_desc}")
+        results["details"].append({
+            "type": "mismatch",
+            "description": mismatch_desc,
+        })
 
         if dry_run:
             audit.write(
