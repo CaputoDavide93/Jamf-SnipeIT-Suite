@@ -31,7 +31,7 @@ class UsernameStandardizer:
         """
         Standardize all email-style usernames to plain format.
 
-        user@createfuture.com → user.name  (the part before @)
+        user@company.com -> user.name  (the part before @)
         """
         logger.info(f"Starting Username Standardization: dry_run={dry_run}")
 
