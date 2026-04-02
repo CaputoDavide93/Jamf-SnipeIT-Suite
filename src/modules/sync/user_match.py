@@ -100,7 +100,7 @@ class UserMatchModule:
             users = self.snipe.get_all_users()
 
             # Initialize AI resolver for ambiguous matches
-            ai_api_key = getattr(self.config, 'anthropic_api_key', '') or os.environ.get('ANTHROPIC_API_KEY', '')
+            ai_api_key = getattr(self.config, 'ai_api_key', '') or os.environ.get('AI_API_KEY', '')
             ai_resolver = AIResolver(api_key=ai_api_key) if ai_api_key else None
 
             self._user_matcher = UserMatcher(

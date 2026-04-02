@@ -2,11 +2,11 @@
 AI-powered user matching for ambiguous cases.
 
 When the fuzzy matcher can't confidently pick between two or more candidates
-(margin < 20%), this module sends all available context to Claude and asks
+(margin < 20%), this module sends all available context to an LLM and asks
 it to reason about which Snipe-IT user is the correct match for a Jamf
 local account.
 
-Requires: ANTHROPIC_API_KEY environment variable or config setting.
+Requires: AI_API_KEY environment variable or config setting.
 """
 import json
 import logging
@@ -17,24 +17,27 @@ logger = logging.getLogger(__name__)
 
 try:
     import anthropic
-    ANTHROPIC_AVAILABLE = True
+    _LLM_AVAILABLE = True
 except ImportError:
     anthropic = None  # type: ignore
-    ANTHROPIC_AVAILABLE = False
+    _LLM_AVAILABLE = False
+
+# Model to use for resolution — fast and cheap
+_MODEL_ID = os.environ.get("AI_MODEL_ID", "claude-haiku-4-5-20251001")
 
 
 class AIResolver:
-    """Resolve ambiguous user matches using Claude."""
+    """Resolve ambiguous user matches using an LLM."""
 
     def __init__(self, api_key: str = "", enabled: bool = True):
-        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-        self.enabled = enabled and ANTHROPIC_AVAILABLE and bool(self.api_key)
+        self.api_key = api_key or os.environ.get("AI_API_KEY", "")
+        self.enabled = enabled and _LLM_AVAILABLE and bool(self.api_key)
         self._client = None
 
         if self.enabled:
             logger.info("AI resolver: enabled")
-        elif enabled and not ANTHROPIC_AVAILABLE:
-            logger.debug("AI resolver: anthropic package not installed")
+        elif enabled and not _LLM_AVAILABLE:
+            logger.debug("AI resolver: LLM package not installed")
         elif enabled and not self.api_key:
             logger.debug("AI resolver: no API key configured")
 
@@ -51,11 +54,11 @@ class AIResolver:
         device_hostname: str = "",
         serial: str = "",
     ) -> Optional[Dict[str, Any]]:
-        """Ask Claude to pick the best match from ambiguous candidates.
+        """Ask the LLM to pick the best match from ambiguous candidates.
 
         Args:
-            local_username: Jamf local account username (e.g. "mikeymacgregor")
-            local_fullname: Jamf local account full name (e.g. "Mikey Macgregor")
+            local_username: Jamf local account username (e.g. "mikeym")
+            local_fullname: Jamf local account full name (e.g. "Mikey M")
             candidates: Top Snipe-IT user candidates with scores
             device_hostname: Optional device hostname for context
             serial: Optional serial number for context
@@ -91,7 +94,7 @@ class AIResolver:
 {candidates_text}
 
 ## Rules:
-- The local username is often firstname+lastname with no separator (e.g. "mikeymacgregor" = "Mikey Macgregor")
+- The local username is often firstname+lastname with no separator (e.g. "mikeym" = "Mikey M")
 - Disabled users have left the company. If a disabled user's old account is still on a machine, the machine was likely reassigned to someone else.
 - If one candidate is DISABLED and another is ACTIVE with a similar name, strongly prefer the ACTIVE user.
 - If the local fullname clearly matches one candidate's name, pick that one.
@@ -110,7 +113,7 @@ If you truly cannot determine the correct match, respond:
                 return None
 
             response = client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=_MODEL_ID,
                 max_tokens=200,
                 messages=[{"role": "user", "content": prompt}],
             )
