@@ -87,3 +87,6 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+terraform/environments/prod/.terraform/
+*.tfstate*
+*.tfvars

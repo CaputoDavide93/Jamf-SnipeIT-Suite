@@ -3,7 +3,7 @@
 # Supports both AMD64 (Intel) and ARM64 (Apple Silicon M1/M2/M3)
 
 # Stage 1: Builder
-FROM --platform=$BUILDPLATFORM python:3.11-slim AS builder
+FROM --platform=$BUILDPLATFORM python:3.14-rc-slim AS builder
 
 # Build arguments for multi-arch support
 ARG TARGETPLATFORM
@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 
 # Stage 2: Runtime
-FROM python:3.11-slim
+FROM python:3.14-rc-slim
 
 LABEL maintainer="Davide Caputo <CaputoDav@gmail.com>"
 LABEL description="Jamf-SnipeIT Suite - Unified Asset Management Tool"

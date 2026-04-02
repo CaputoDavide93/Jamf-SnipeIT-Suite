@@ -1,0 +1,37 @@
+# =============================================================================
+# Jamf-SnipeIT Suite — Production Variables
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in your values.
+# NEVER commit terraform.tfvars to version control!
+# =============================================================================
+
+aws_region  = "eu-west-1"
+aws_profile = "prod"
+
+# -- Jamf Pro --
+jamf_base_url = "https://your-instance.jamfcloud.com"
+jamf_username = ""
+jamf_password = ""
+
+# -- Snipe-IT --
+snipeit_base_url  = "https://snipeit.your-domain.com"
+snipeit_api_token = ""
+
+# -- Azure AD / Microsoft Entra --
+azure_tenant_id     = ""
+azure_client_id     = ""
+azure_client_secret = ""
+
+# -- Slack --
+slack_bot_token  = "xoxb-..."
+slack_channel_id = ""
+
+# -- HiBob (optional) --
+hibob_service_user_id    = ""
+hibob_service_user_token = ""
+
+# -- AI Resolver (optional) --
+ai_api_key = ""
+
+# -- Monitoring (optional — leave empty for no alarms) --
+alarm_email = ""
