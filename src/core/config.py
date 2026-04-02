@@ -84,7 +84,6 @@ class LoggingConfig:
 
 
 @dataclass
-@dataclass
 class SlackConfig:
     """Slack notification configuration."""
     enabled: bool = False

@@ -148,7 +148,7 @@ class ReconciliationModule:
     
     def _fetch_snipe_assets(self) -> List[Dict]:
         """Fetch all hardware assets from Snipe-IT."""
-        assets = self.snipe.search_assets(limit=5000)
+        assets = self.snipe.get_all_assets()
         devices = []
         
         for asset in assets:

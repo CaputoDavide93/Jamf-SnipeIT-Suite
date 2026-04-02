@@ -113,10 +113,13 @@ class RetryQueue:
 
     MAX_ATTEMPTS = 3
 
+    MAX_ITEMS = 500  # Auto-purge completed/dead items when queue exceeds this
+
     def __init__(self, queue_file: str = "./output/retry_queue.json"):
         self._path = Path(queue_file)
         self._items: List[Dict[str, Any]] = []
         self._load()
+        self._auto_purge()
 
     # ---- persistence ----
 
@@ -137,6 +140,16 @@ class RetryQueue:
                 json.dump(self._items, f, indent=2, default=str)
         except OSError as exc:
             logger.error(f"Failed to save retry queue: {exc}")
+
+    def _auto_purge(self) -> None:
+        """Remove completed/dead items if queue is too large."""
+        if len(self._items) <= self.MAX_ITEMS:
+            return
+        before = len(self._items)
+        self._items = [i for i in self._items if i.get("status") == "pending"]
+        if len(self._items) < before:
+            logger.info(f"Retry queue: auto-purged {before - len(self._items)} completed/dead items")
+            self._save()
 
     # ---- public API ----
 

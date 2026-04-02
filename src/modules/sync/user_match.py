@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.config import Config
-from clients.jamf import JamfClient
-from clients.snipeit import SnipeITClient
-from clients.slack import SlackClient
+from core.client_factory import create_jamf_client, create_snipeit_client, create_slack_client
 from infra.audit_csv import AuditCSV
 from infra.progress import ProgressTracker
 from infra.helpers import rate_limit_delay
@@ -42,36 +40,14 @@ class UserMatchModule:
         self.batch_size = self.settings.get("batch_size", 100)
         self.batch_delay = self.settings.get("batch_delay_seconds", 30)
         
-        # Initialize clients
-        self.jamf = JamfClient(
-            base_url=config.jamf.base_url,
-            username=config.jamf.username,
-            password=config.jamf.password,
-            client_id=config.jamf.client_id,
-            client_secret=config.jamf.client_secret,
-            timeout=config.api.timeout_seconds,
-            max_retries=config.api.max_retries,
-            retry_delay=config.api.retry_delay_seconds,
-        )
-        
-        self.snipe = SnipeITClient(
-            base_url=config.snipeit.base_url,
-            api_token=config.snipeit.api_token,
-            timeout=config.api.timeout_seconds,
-            max_retries=config.api.max_retries,
-            retry_delay=config.api.retry_delay_seconds,
-            rate_limit_wait=config.api.rate_limit_wait_seconds,
-        )
+        # Clients (centralised factory)
+        self.jamf = create_jamf_client(config)
+        self.snipe = create_snipeit_client(config)
         
         # Load model map
         self.model_map = self._load_model_map(model_map_path)
         
-        # Slack notifications (for ambiguous-match warnings)
-        self.slack = SlackClient(
-            bot_token=config.slack.bot_token,
-            channel_id=config.slack.channel_id,
-            enabled=config.slack.enabled,
-        )
+        self.slack = create_slack_client(config)
         
         # User directory (lazy loaded)
         self._user_matcher: Optional[UserMatcher] = None
@@ -468,7 +444,9 @@ class UserMatchModule:
                                 logger.info(f"Reassignment successful: asset {asset_id} -> user {snipe_user_id}")
                                 results["reassignments"] += 1
                             else:
-                                logger.error(f"Checkout failed after checkin for asset {asset_id}")
+                                # Rollback: re-checkout to original user
+                                logger.warning(f"Checkout failed for asset {asset_id}, rolling back to user {current_uid}")
+                                self.snipe.checkout_asset(asset_id, current_uid, note="Rollback: reassignment checkout failed")
                                 results["errors"] += 1
                         else:
                             logger.error(f"Checkin failed for asset {asset_id}, skipping reassignment")

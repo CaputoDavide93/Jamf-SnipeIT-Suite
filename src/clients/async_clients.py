@@ -35,7 +35,7 @@ class RateLimiter:
         """
         self.rate = rate
         self.tokens = rate
-        self.last_update = asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+        self.last_update = 0  # Updated on first acquire()
         self._lock = asyncio.Lock()
     
     async def acquire(self):
@@ -434,13 +434,11 @@ async def run_parallel_reconciliation(jamf_url: str, jamf_user: str, jamf_pass: 
 def run_async(coro):
     """Helper to run async code from sync context."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # We're already in an async context
-            return asyncio.ensure_future(coro)
-        return loop.run_until_complete(coro)
+        loop = asyncio.get_running_loop()
+        # We're in an async context — can't use run_until_complete
+        return asyncio.ensure_future(coro)
     except RuntimeError:
-        # No event loop, create one
+        # No running loop — safe to use asyncio.run
         return asyncio.run(coro)
 
 

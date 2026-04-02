@@ -144,28 +144,28 @@ class ModelSyncModule:
         logger.debug(f"Could not detect manufacturer for '{model_name}', defaulting to Apple")
         return "Apple"
     
-    def check_models(self) -> Set[str]:
+    def check_models(self) -> Dict[str, Any]:
         """
-        List all unique models in Jamf Pro.
-        
+        List all unique models in Jamf Pro and compare against Snipe-IT.
+
         Returns:
-            Set of unique model names
+            Dict with total_jamf_models, missing_models, existing_models
         """
         logger.debug("Discovering unique models in Jamf Pro...")
-        
+
         computers = self.jamf.get_all_computers_basic()
-        
+
         if not computers:
             logger.warning("No computers returned from Jamf")
-            return set()
-        
+            return {"total_jamf_models": 0, "missing_models": [], "existing_models": []}
+
         models: Set[str] = set()
-        
+
         for comp in computers:
             comp_id = comp.get("id")
             if not comp_id:
                 continue
-            
+
             try:
                 detail = self.jamf.get_computer_by_id(comp_id, subsets=["Hardware"])
                 if detail:
@@ -176,9 +176,19 @@ class ModelSyncModule:
                         models.add(model_name)
             except Exception as e:
                 logger.debug(f"Could not get model for computer {comp_id}: {e}")
-        
+
         logger.debug(f"Found {len(models)} unique models")
-        return models
+
+        # Compare against Snipe-IT
+        snipe_models = self.snipe.get_model_name_to_id_map()
+        missing = [m for m in sorted(models) if m.lower() not in snipe_models]
+        existing = [m for m in sorted(models) if m.lower() in snipe_models]
+
+        return {
+            "total_jamf_models": len(models),
+            "missing_models": missing,
+            "existing_models": existing,
+        }
     
     def provision_models(self, dry_run: bool = False) -> Dict[str, Any]:
         """
@@ -305,12 +315,17 @@ class ModelSyncModule:
             return results
         
         logger.info(f"Processing {len(computers)} computers for metadata sync")
-        
+
+        # Pre-fetch all Snipe-IT assets in one bulk call (eliminates N+1)
+        logger.info("Pre-fetching Snipe-IT asset serial map...")
+        snipe_serial_map = self.snipe.get_assets_by_serial_map()
+        logger.info(f"Loaded {len(snipe_serial_map)} Snipe-IT assets")
+
         progress = ProgressTracker("Model Sync", total=len(computers), log_every=50)
-        
+
         for i, comp in enumerate(computers, 1):
             serial = comp.get("serial_number", "").strip()
-            
+
             if not serial:
                 progress.advance()
                 continue
@@ -318,7 +333,7 @@ class ModelSyncModule:
             logger.debug(f"[{i}/{len(computers)}] Processing: {serial}")
             
             try:
-                updated = self._sync_single_asset(serial, model_map, dry_run)
+                updated = self._sync_single_asset(serial, model_map, dry_run, snipe_serial_map)
                 results["total_processed"] += 1
                 
                 if updated:
@@ -348,10 +363,11 @@ class ModelSyncModule:
         serial: str,
         model_map: Dict[str, int],
         dry_run: bool,
+        snipe_serial_map: Optional[Dict[str, Dict]] = None,
     ) -> bool:
         """
         Sync metadata for a single asset.
-        
+
         Returns:
             True if updated
         """
@@ -360,16 +376,20 @@ class ModelSyncModule:
         if not jamf_comp:
             logger.debug(f"No Jamf computer for serial: {serial}")
             return False
-        
+
         hardware = jamf_comp.get("hardware", {}) or {}
         model_name = hardware.get("model", "")
         model_identifier = hardware.get("model_identifier", "")
-        
+
         if not model_name:
             return False
-        
-        # Get Snipe-IT asset
-        snipe_asset = self.snipe.get_asset_by_serial(serial)
+
+        # Use pre-fetched map if available, otherwise fall back to individual lookup
+        snipe_asset = None
+        if snipe_serial_map is not None:
+            snipe_asset = snipe_serial_map.get(serial.upper())
+        else:
+            snipe_asset = self.snipe.get_asset_by_serial(serial)
         if not snipe_asset:
             logger.debug(f"No Snipe-IT asset for serial: {serial}")
             return False

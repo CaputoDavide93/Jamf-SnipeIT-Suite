@@ -53,6 +53,8 @@ env/
 
 # Configuration with secrets (KEEP config.yaml.example)
 config/config.yaml
+config/config.yaml.*
+config/*.sb-*
 config/model_map.json
 
 # Logs and output - these can be large and contain sensitive info
@@ -90,3 +92,4 @@ temp/
 terraform/environments/prod/.terraform/
 *.tfstate*
 *.tfvars
+.claude/

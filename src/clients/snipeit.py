@@ -112,7 +112,9 @@ class SnipeITClient:
                 
                 # Handle other errors (retry-able)
                 if response.status_code >= 400:
-                    logger.error(f"API error {response.status_code}: {response.text[:200]}")
+                    # Truncate and sanitize — response body may contain reflected credentials
+                    safe_body = response.text[:200].replace(self.api_token[:8], "***") if response.text else ""
+                    logger.error(f"API error {response.status_code}: {safe_body}")
                     if attempt < self.max_retries:
                         delay = self.retry_delay * (2 ** (attempt - 1))
                         time.sleep(delay)

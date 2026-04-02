@@ -5,6 +5,8 @@ Creates new users in Snipe-IT for members not yet present.
 """
 import html
 import logging
+import secrets
+import string
 from typing import Dict, Any, List, Optional
 
 from core.config import Config
@@ -51,7 +53,8 @@ class AzureStartersModule:
         # Module settings
         self.settings = config.modules.get("azure_starters", {})
         self.update_job_titles = self.settings.get("update_job_titles", True)
-        self.default_password = self.settings.get("default_password", "ChangeMe!1")
+        # No static default — each user gets a unique random password
+        self._generate_password = self._make_password_generator()
         self.starters_group_id = (
             self.settings.get("group_id") or 
             getattr(config.azure, 'starters_group_id', None)
@@ -289,8 +292,8 @@ class AzureStartersModule:
                     "last_name": last_name or first_name,  # Snipe-IT requires last name
                     "email": email,
                     "username": username,
-                    "password": self.default_password,
-                    "password_confirmation": self.default_password,
+                    "password": (pw := self._generate_password()),
+                    "password_confirmation": pw,
                     "jobtitle": job_title,
                 }
                 
@@ -353,6 +356,19 @@ class AzureStartersModule:
             if len(results["errors"]) > 5:
                 logger.error(f"  ... and {len(results['errors']) - 5} more")
 
+    @staticmethod
+    def _make_password_generator():
+        """Return a function that generates cryptographically random passwords."""
+        alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+        def _generate() -> str:
+            # 24 chars, guaranteed at least 1 upper, 1 lower, 1 digit, 1 special
+            while True:
+                pw = ''.join(secrets.choice(alphabet) for _ in range(24))
+                if (any(c.isupper() for c in pw) and any(c.islower() for c in pw)
+                        and any(c.isdigit() for c in pw) and any(c in "!@#$%^&*" for c in pw)):
+                    return pw
+        return _generate
+
     def close(self) -> None:
         """Clean up resources."""
         if hasattr(self, 'azure'):
@@ -372,4 +388,7 @@ def run_azure_starters(config: Config, dry_run: bool = False) -> Dict[str, Any]:
         Results dictionary
     """
     module = AzureStartersModule(config, dry_run=dry_run)
-    return module.run()
+    try:
+        return module.run()
+    finally:
+        module.close()

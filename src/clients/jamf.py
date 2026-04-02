@@ -225,8 +225,7 @@ class JamfClient:
                 # This is common in Jamf Classic API when records are being updated elsewhere
                 # or when the device is actively checking in
                 if response.status_code == 409:
-                    # Log the actual response body to understand the error
-                    logger.debug(f"409 Response body: {response.text}")
+                    logger.debug(f"409 Conflict for {url}: {response.text[:100] if response.text else ''}")
                     if attempt < self.max_retries:
                         # Use jitter to avoid thundering herd - random delay 1-5 seconds
                         import random
@@ -441,7 +440,7 @@ class JamfClient:
   </location>
 </computer>"""
         
-        logger.debug(f"Update XML for computer {computer_id}: {xml}")
+        logger.debug(f"Update XML for computer {computer_id}: [location fields]")
         
         if dry_run:
             logger.info(

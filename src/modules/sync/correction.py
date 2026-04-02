@@ -15,9 +15,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.config import Config
-from clients.jamf import JamfClient
-from clients.snipeit import SnipeITClient
-from clients.slack import SlackClient
+from core.client_factory import create_jamf_client, create_snipeit_client, create_slack_client
 from infra.audit_csv import AuditCSV
 from infra.progress import ProgressTracker
 from infra.helpers import rate_limit_delay
@@ -40,34 +38,13 @@ class CorrectionModule:
         self.batch_size = self.settings.get("batch_size", 50)
         self.batch_delay = self.settings.get("batch_delay_seconds", 2)
 
-        # Clients
-        self.jamf = JamfClient(
-            base_url=config.jamf.base_url,
-            username=config.jamf.username,
-            password=config.jamf.password,
-            client_id=config.jamf.client_id,
-            client_secret=config.jamf.client_secret,
-            timeout=config.api.timeout_seconds,
-            max_retries=config.api.max_retries,
-            retry_delay=config.api.retry_delay_seconds,
-        )
-        self.snipe = SnipeITClient(
-            base_url=config.snipeit.base_url,
-            api_token=config.snipeit.api_token,
-            timeout=config.api.timeout_seconds,
-            max_retries=config.api.max_retries,
-            retry_delay=config.api.retry_delay_seconds,
-            rate_limit_wait=config.api.rate_limit_wait_seconds,
-        )
+        # Clients (centralised factory)
+        self.jamf = create_jamf_client(config)
+        self.snipe = create_snipeit_client(config)
 
         self._user_matcher: Optional[UserMatcher] = None
 
-        # Slack for investigation notifications
-        self.slack = SlackClient(
-            bot_token=config.slack.bot_token,
-            channel_id=config.slack.channel_id,
-            enabled=config.slack.enabled,
-        )
+        self.slack = create_slack_client(config)
         # Cache for Jamf computer details (serial → dict), populated lazily
         self._jamf_cache: Dict[str, Optional[Dict]] = {}
 
@@ -434,11 +411,21 @@ class CorrectionModule:
                 notes="Reassigned successfully",
             )
         else:
-            results["errors"] += 1
-            logger.error(
-                f"Correction failed: checked-in asset {asset_id} but checkout "
-                f"to user {expected_uid} failed — asset is now unassigned!"
+            # Rollback: re-checkout to the original user to avoid orphaned asset
+            logger.warning(
+                f"Checkout to user {expected_uid} failed — rolling back "
+                f"to original user {current_uid}"
             )
+            rollback_ok = self.snipe.checkout_asset(
+                asset_id, current_uid,
+                note=f"Rollback: checkout to {expected_uid} failed, restoring original assignment",
+            )
+            if rollback_ok:
+                logger.info(f"Rollback successful: asset {asset_id} back to user {current_uid}")
+            else:
+                logger.error(f"ROLLBACK FAILED: asset {asset_id} is now unassigned!")
+
+            results["errors"] += 1
             audit.write(
                 serial=serial,
                 asset_id=str(asset_id),
