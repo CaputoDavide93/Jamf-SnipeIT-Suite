@@ -22,15 +22,15 @@ echo -e "${BLUE}Jamf-SnipeIT Suite — Initializing${NC}"
 # Change to app directory
 cd /app
 
-# Check if config exists
-if [ ! -f "/app/config/config.yaml" ]; then
-    echo -e "${RED}❌ Configuration file not found at /app/config/config.yaml${NC}"
-    echo -e "${YELLOW}   Please mount your config file:${NC}"
-    echo "   docker run -v /path/to/config.yaml:/app/config/config.yaml ..."
+# Check if config exists (optional — env vars can substitute)
+if [ -f "/app/config/config.yaml" ]; then
+    echo -e "${GREEN}Config: found (config.yaml)${NC}"
+elif [ -n "$JAMF_BASE_URL" ] && [ -n "$SNIPEIT_BASE_URL" ]; then
+    echo -e "${GREEN}Config: from environment variables${NC}"
+else
+    echo -e "${RED}No configuration found. Provide config.yaml or set environment variables.${NC}"
     exit 1
 fi
-
-echo -e "${GREEN}Config: found${NC}"
 
 # Create logs directory if needed
 mkdir -p /app/logs

@@ -17,7 +17,7 @@ resource "aws_ecs_cluster" "main" {
 resource "aws_security_group" "ecs_task" {
   name_prefix = "${local.full_name}-ecs-"
   vpc_id      = local.vpc_id
-  description = "Jamf-SnipeIT Suite ECS task — outbound API calls only"
+  description = "Jamf-SnipeIT Suite ECS task - outbound API calls only"
 
   egress {
     from_port   = 0
@@ -54,6 +54,11 @@ resource "aws_ecs_task_definition" "app" {
       { name = "RUN_MODE", value = "run-once" },
       { name = "TZ", value = "Europe/London" },
       { name = "SLACK_CHANNEL_ID", value = var.slack_channel_id },
+      { name = "AZURE_LEAVERS_GROUP_ID", value = var.azure_leavers_group_id },
+      { name = "AZURE_DISABLED_GROUP_ID", value = var.azure_disabled_group_id },
+      { name = "AZURE_STARTERS_GROUP_ID", value = var.azure_starters_group_id },
+      { name = "MATCHING_EMAIL_DOMAIN", value = var.matching_email_domain },
+      { name = "MATCHING_SKIP_USERNAMES", value = var.matching_skip_usernames },
     ]
 
     # ALL credentials injected from SSM SecureString at runtime

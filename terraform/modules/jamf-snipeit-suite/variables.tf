@@ -94,6 +94,32 @@ variable "azure_client_secret" {
   sensitive = true
 }
 
+variable "azure_leavers_group_id" {
+  type    = string
+  default = ""
+}
+
+variable "azure_disabled_group_id" {
+  type    = string
+  default = ""
+}
+
+variable "azure_starters_group_id" {
+  type    = string
+  default = ""
+}
+
+# -- Matching --
+variable "matching_email_domain" {
+  type    = string
+  default = ""
+}
+
+variable "matching_skip_usernames" {
+  type    = string
+  default = "admin,shared,guest"
+}
+
 # -- Secrets: Slack --
 variable "slack_bot_token" {
   type      = string

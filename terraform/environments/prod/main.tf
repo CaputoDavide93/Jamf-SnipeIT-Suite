@@ -21,31 +21,17 @@ terraform {
     }
   }
 
-  # -- Remote state --
-  # Create the S3 bucket + DynamoDB lock table first, then uncomment:
-  #
-  # backend "s3" {
-  #   bucket         = "jamf-snipeit-terraform-state-<AWS_ACCOUNT_ID>"
-  #   key            = "jamf-snipeit-suite/terraform.tfstate"
-  #   region         = "eu-west-1"
-  #   dynamodb_table = "jamf-snipeit-terraform-locks"
-  #   encrypt        = true
-  # }
-  #
-  # Bootstrap commands:
-  #   aws s3api create-bucket --bucket jamf-snipeit-terraform-state-<AWS_ACCOUNT_ID> \
-  #     --region eu-west-1 --create-bucket-configuration LocationConstraint=eu-west-1
-  #   aws s3api put-bucket-versioning --bucket jamf-snipeit-terraform-state-<AWS_ACCOUNT_ID> \
-  #     --versioning-configuration Status=Enabled
-  #   aws dynamodb create-table --table-name jamf-snipeit-terraform-locks \
-  #     --attribute-definitions AttributeName=LockID,AttributeType=S \
-  #     --key-schema AttributeName=LockID,KeyType=HASH \
-  #     --billing-mode PAY_PER_REQUEST --region eu-west-1
+  backend "s3" {
+    bucket         = "jamf-snipeit-terraform-state-<AWS_ACCOUNT_ID>"
+    key            = "jamf-snipeit-suite/terraform.tfstate"
+    region         = "eu-west-1"
+    dynamodb_table = "jamf-snipeit-terraform-locks"
+    encrypt        = true
+  }
 }
 
 provider "aws" {
-  region  = var.aws_region
-  profile = var.aws_profile
+  region = var.aws_region
 
   # SAFETY: Only deploy to THIS account and region — prevents accidental
   # deployment to wrong account if credentials/profile are misconfigured
@@ -81,9 +67,16 @@ module "jamf_snipeit_suite" {
   snipeit_api_token = var.snipeit_api_token
 
   # -- Azure AD --
-  azure_tenant_id     = var.azure_tenant_id
-  azure_client_id     = var.azure_client_id
-  azure_client_secret = var.azure_client_secret
+  azure_tenant_id        = var.azure_tenant_id
+  azure_client_id        = var.azure_client_id
+  azure_client_secret    = var.azure_client_secret
+  azure_leavers_group_id  = var.azure_leavers_group_id
+  azure_disabled_group_id = var.azure_disabled_group_id
+  azure_starters_group_id = var.azure_starters_group_id
+
+  # -- Matching --
+  matching_email_domain   = var.matching_email_domain
+  matching_skip_usernames = var.matching_skip_usernames
 
   # -- Slack --
   slack_bot_token  = var.slack_bot_token
@@ -163,6 +156,26 @@ variable "azure_client_id" {
 variable "azure_client_secret" {
   type      = string
   sensitive = true
+}
+variable "azure_leavers_group_id" {
+  type    = string
+  default = ""
+}
+variable "azure_disabled_group_id" {
+  type    = string
+  default = ""
+}
+variable "azure_starters_group_id" {
+  type    = string
+  default = ""
+}
+variable "matching_email_domain" {
+  type    = string
+  default = ""
+}
+variable "matching_skip_usernames" {
+  type    = string
+  default = "admin,shared,guest"
 }
 
 variable "slack_bot_token" {

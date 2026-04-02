@@ -29,10 +29,6 @@ data "aws_subnets" "default" {
     name   = "vpc-id"
     values = [var.vpc_id != "" ? var.vpc_id : data.aws_vpc.default[0].id]
   }
-  filter {
-    name   = "map-public-ip-on-launch"
-    values = ["true"]
-  }
 }
 
 locals {

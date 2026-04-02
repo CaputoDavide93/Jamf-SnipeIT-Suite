@@ -133,8 +133,15 @@ class Config:
             ConfigurationError: If config is invalid or missing required fields
         """
         self._raw: Dict[str, Any] = {}
-        self._config_path = self._resolve_config_path(config_path)
-        self._load()
+        try:
+            self._config_path = self._resolve_config_path(config_path)
+            self._load()
+        except FileNotFoundError:
+            # No config file — build config entirely from environment variables
+            logger.info("No config file found — loading from environment variables")
+            self._config_path = Path("/app/config/config.yaml")
+            self._raw = self._build_from_env()
+
         
         # Parse into typed configs
         self.jamf = self._parse_jamf()
@@ -211,6 +218,79 @@ class Config:
         # Substitute ${VAR} and ${VAR:-default} patterns with environment variables
         raw_text = self._substitute_env_vars(raw_text)
         self._raw = yaml.safe_load(raw_text) or {}
+
+    @staticmethod
+    def _build_from_env() -> Dict[str, Any]:
+        """Build config dict from environment variables (for Fargate/serverless)."""
+        def _env(name: str, default: str = "") -> str:
+            return os.environ.get(name, default)
+
+        return {
+            "jamf": {
+                "base_url": _env("JAMF_BASE_URL"),
+                "username": _env("JAMF_USERNAME"),
+                "password": _env("JAMF_PASSWORD"),
+                "client_id": _env("JAMF_CLIENT_ID"),
+                "client_secret": _env("JAMF_CLIENT_SECRET"),
+                "ea_snipe_asset_id": _env("JAMF_EA_NAME", "SnipeIT_Asset_ID"),
+                "smart_group": _env("JAMF_SMART_GROUP", "All Managed Clients"),
+            },
+            "snipeit": {
+                "base_url": _env("SNIPEIT_BASE_URL"),
+                "api_token": _env("SNIPEIT_API_TOKEN"),
+                "status_deployed_id": int(_env("SNIPEIT_STATUS_DEPLOYED_ID", "1")),
+                "status_pending_id": int(_env("SNIPEIT_STATUS_PENDING_ID", "8")),
+                "status_checkedout_id": int(_env("SNIPEIT_STATUS_CHECKEDOUT_ID", "2")),
+                "model_fallback_id": int(_env("SNIPEIT_MODEL_FALLBACK_ID", "40")),
+                "company_id": int(_env("SNIPEIT_COMPANY_ID", "1")),
+                "location_id": int(_env("SNIPEIT_LOCATION_ID", "0")),
+            },
+            "azure": {
+                "tenant_id": _env("AZURE_TENANT_ID"),
+                "client_id": _env("AZURE_CLIENT_ID"),
+                "client_secret": _env("AZURE_CLIENT_SECRET"),
+                "scope": _env("AZURE_SCOPE", "https://graph.microsoft.com/.default"),
+                "leavers_group_id": _env("AZURE_LEAVERS_GROUP_ID"),
+                "disabled_group_id": _env("AZURE_DISABLED_GROUP_ID"),
+                "starters_group_id": _env("AZURE_STARTERS_GROUP_ID"),
+            },
+            "matching": {
+                "email_domain": _env("MATCHING_EMAIL_DOMAIN"),
+                "min_score": 14,
+                "weight_lcs": 1.0,
+                "weight_char_overlap": 0.3,
+                "weight_bigram_dice": 2.0,
+                "use_bigram_dice": True,
+                "allow_reassignment": True,
+                "skip_usernames": _env("MATCHING_SKIP_USERNAMES", "admin,shared,guest").split(","),
+            },
+            "api": {
+                "timeout_seconds": 30,
+                "max_retries": 5,
+                "retry_delay_seconds": 3,
+                "rate_limit_wait_seconds": 60,
+            },
+            "logging": {
+                "level": _env("LOG_LEVEL", "INFO"),
+                "dir": "./logs",
+                "audit_csv": False,
+            },
+            "slack": {
+                "enabled": bool(_env("SLACK_BOT_TOKEN")),
+                "bot_token": _env("SLACK_BOT_TOKEN"),
+                "channel_id": _env("SLACK_CHANNEL_ID"),
+                "notify_on_error": True,
+                "notify_disabled_with_assets": True,
+                "notify_module_summary": True,
+            },
+            "hibob": {
+                "service_user_id": _env("HIBOB_SERVICE_USER_ID"),
+                "service_user_token": _env("HIBOB_SERVICE_USER_TOKEN"),
+                "base_url": _env("HIBOB_BASE_URL", "https://api.hibob.com/v1"),
+            },
+            "scheduler": {"enabled": False, "run_on_startup": True},
+            "modules": {},
+        }
 
     @staticmethod
     def _substitute_env_vars(text: str) -> str:
