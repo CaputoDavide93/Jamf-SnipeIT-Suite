@@ -14,6 +14,10 @@ variable "environment" {
 variable "aws_region" {
   type    = string
   default = "eu-west-1"
+  validation {
+    condition     = var.aws_region == "eu-west-1"
+    error_message = "This project must be deployed to eu-west-1 only."
+  }
 }
 
 variable "project_name" {

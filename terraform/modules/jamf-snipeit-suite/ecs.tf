@@ -34,7 +34,7 @@ resource "aws_security_group" "ecs_task" {
   }
 }
 
-# Task definition
+# Task definition — ALL credentials injected from SSM at runtime
 resource "aws_ecs_task_definition" "app" {
   family                   = local.full_name
   requires_compatibilities = ["FARGATE"]
@@ -49,23 +49,26 @@ resource "aws_ecs_task_definition" "app" {
     image     = "${aws_ecr_repository.app.repository_url}:latest"
     essential = true
 
+    # Non-sensitive configuration only
     environment = [
       { name = "RUN_MODE", value = "run-once" },
       { name = "TZ", value = "Europe/London" },
-      { name = "JAMF_BASE_URL", value = var.jamf_base_url },
-      { name = "JAMF_USERNAME", value = var.jamf_username },
-      { name = "SNIPEIT_BASE_URL", value = var.snipeit_base_url },
-      { name = "AZURE_TENANT_ID", value = var.azure_tenant_id },
-      { name = "AZURE_CLIENT_ID", value = var.azure_client_id },
       { name = "SLACK_CHANNEL_ID", value = var.slack_channel_id },
-      { name = "HIBOB_SERVICE_USER_ID", value = var.hibob_service_user_id },
     ]
 
+    # ALL credentials injected from SSM SecureString at runtime
+    # These are NOT visible in the task definition, console, or CloudTrail
     secrets = [
+      { name = "JAMF_BASE_URL", valueFrom = aws_ssm_parameter.jamf_base_url.arn },
+      { name = "JAMF_USERNAME", valueFrom = aws_ssm_parameter.jamf_username.arn },
       { name = "JAMF_PASSWORD", valueFrom = aws_ssm_parameter.jamf_password.arn },
+      { name = "SNIPEIT_BASE_URL", valueFrom = aws_ssm_parameter.snipeit_base_url.arn },
       { name = "SNIPEIT_API_TOKEN", valueFrom = aws_ssm_parameter.snipeit_api_token.arn },
+      { name = "AZURE_TENANT_ID", valueFrom = aws_ssm_parameter.azure_tenant_id.arn },
+      { name = "AZURE_CLIENT_ID", valueFrom = aws_ssm_parameter.azure_client_id.arn },
       { name = "AZURE_CLIENT_SECRET", valueFrom = aws_ssm_parameter.azure_client_secret.arn },
       { name = "SLACK_BOT_TOKEN", valueFrom = aws_ssm_parameter.slack_bot_token.arn },
+      { name = "HIBOB_SERVICE_USER_ID", valueFrom = aws_ssm_parameter.hibob_user_id.arn },
       { name = "HIBOB_SERVICE_USER_TOKEN", valueFrom = aws_ssm_parameter.hibob_token.arn },
       { name = "AI_API_KEY", valueFrom = aws_ssm_parameter.ai_api_key.arn },
     ]

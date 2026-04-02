@@ -21,19 +21,35 @@ terraform {
     }
   }
 
-  # -- Remote state (run bootstrap script first) --
+  # -- Remote state --
+  # Create the S3 bucket + DynamoDB lock table first, then uncomment:
+  #
   # backend "s3" {
-  #   bucket         = "jamf-snipeit-terraform-state"
+  #   bucket         = "jamf-snipeit-terraform-state-<AWS_ACCOUNT_ID>"
   #   key            = "jamf-snipeit-suite/terraform.tfstate"
   #   region         = "eu-west-1"
-  #   dynamodb_table = "terraform-state-locks"
+  #   dynamodb_table = "jamf-snipeit-terraform-locks"
   #   encrypt        = true
   # }
+  #
+  # Bootstrap commands:
+  #   aws s3api create-bucket --bucket jamf-snipeit-terraform-state-<AWS_ACCOUNT_ID> \
+  #     --region eu-west-1 --create-bucket-configuration LocationConstraint=eu-west-1
+  #   aws s3api put-bucket-versioning --bucket jamf-snipeit-terraform-state-<AWS_ACCOUNT_ID> \
+  #     --versioning-configuration Status=Enabled
+  #   aws dynamodb create-table --table-name jamf-snipeit-terraform-locks \
+  #     --attribute-definitions AttributeName=LockID,AttributeType=S \
+  #     --key-schema AttributeName=LockID,KeyType=HASH \
+  #     --billing-mode PAY_PER_REQUEST --region eu-west-1
 }
 
 provider "aws" {
   region  = var.aws_region
   profile = var.aws_profile
+
+  # SAFETY: Only deploy to THIS account and region — prevents accidental
+  # deployment to wrong account if credentials/profile are misconfigured
+  allowed_account_ids = ["<AWS_ACCOUNT_ID>"]
 
   default_tags {
     tags = {
@@ -98,6 +114,10 @@ module "jamf_snipeit_suite" {
 variable "aws_region" {
   type    = string
   default = "eu-west-1"
+  validation {
+    condition     = var.aws_region == "eu-west-1"
+    error_message = "This project must be deployed to eu-west-1 only."
+  }
 }
 
 variable "aws_profile" {
