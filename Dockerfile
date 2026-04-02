@@ -45,6 +45,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY src/ ./src/
 
+# Copy non-secret config files (mapping tables, model maps)
+COPY config/equipment_mapping.json ./config/equipment_mapping.json
+COPY config/model_map.json* ./config/
+
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/
 RUN chmod +x /app/docker-entrypoint.sh
