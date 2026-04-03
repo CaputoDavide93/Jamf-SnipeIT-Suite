@@ -80,6 +80,7 @@ class UserMatcher:
         weight_bigram_dice: float = 2.0,
         use_bigram_dice: bool = True,
         ai_resolver=None,
+        azure_users: Optional[List[Dict[str, Any]]] = None,
     ):
         self.email_domain = email_domain.lower().lstrip("@")
         self.ai_resolver = ai_resolver
@@ -91,6 +92,15 @@ class UserMatcher:
         self.weight_char_overlap = weight_char_overlap
         self.weight_bigram_dice = weight_bigram_dice
         self.use_bigram_dice = use_bigram_dice
+
+        self.azure_users = azure_users or []
+        # Build Azure lookup by name parts for cross-platform matching
+        self._azure_by_name_part: Dict[str, List[Dict]] = {}
+        for u in self.azure_users:
+            display = (u.get("displayName") or "").lower().strip()
+            for part in display.split():
+                if len(part) >= 3:
+                    self._azure_by_name_part.setdefault(part, []).append(u)
 
         # Include ALL users (including [Disabled] — their machines may still be in stock)
         self.users = list(users)
@@ -328,20 +338,57 @@ class UserMatcher:
                         f"margin={margin:.1%} < 20%"
                     )
 
-                    # Try AI resolver before giving up
+                    # Try AI resolver with cross-platform data
                     if self.ai_resolver:
                         ai_candidates = [
                             {"name": u.get("name"), "email": u.get("email"),
+                             "username": u.get("username", ""),
                              "score": round(s, 2), "id": u.get("id")}
-                            for s, u in candidates[:5]
+                            for s, u in candidates[:8]
                         ]
-                        ai_pick = self.ai_resolver.resolve_ambiguous_match(
-                            local_username=username,
-                            local_fullname=full_name_hint,
-                            candidates=ai_candidates,
-                        )
+
+                        # Find relevant Azure AD users by name parts
+                        azure_matches = []
+                        hint_parts = normalized_hint.split()
+                        seen_ids = set()
+                        for part in hint_parts:
+                            if len(part) >= 3:
+                                for au in self._azure_by_name_part.get(part, []):
+                                    au_id = au.get("id", au.get("userPrincipalName"))
+                                    if au_id not in seen_ids:
+                                        seen_ids.add(au_id)
+                                        azure_matches.append(au)
+                        # Also search by username
+                        uname_parts = username.lower()
+                        for part in [uname_parts[:4], uname_parts[-4:]]:
+                            if len(part) >= 3:
+                                for au in self._azure_by_name_part.get(part, []):
+                                    au_id = au.get("id", au.get("userPrincipalName"))
+                                    if au_id not in seen_ids:
+                                        seen_ids.add(au_id)
+                                        azure_matches.append(au)
+
+                        if azure_matches:
+                            # Use cross-platform resolver
+                            ai_pick = self.ai_resolver.resolve_cross_platform(
+                                local_username=username,
+                                local_fullname=full_name_hint,
+                                candidates=ai_candidates,
+                                azure_users=azure_matches[:5],
+                            )
+                        else:
+                            # Fall back to basic resolver
+                            ai_pick = self.ai_resolver.resolve_ambiguous_match(
+                                local_username=username,
+                                local_fullname=full_name_hint,
+                                candidates=ai_candidates,
+                            )
+
                         if ai_pick:
-                            # Find the full user dict for the AI pick
+                            if ai_pick.get("_keep_current"):
+                                debug_info["exact_hit_reason"] = "ai_keep_current"
+                                debug_info["rejected_reason"] = None
+                                return None, debug_info  # Let caller keep current
                             picked_id = ai_pick.get("id")
                             for _s, u in candidates:
                                 if u.get("id") == picked_id:

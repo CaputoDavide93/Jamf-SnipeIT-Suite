@@ -70,12 +70,31 @@ class UserMatchModule:
             return {}
     
     def _get_user_matcher(self) -> UserMatcher:
-        """Get or create user matcher with Snipe-IT users."""
+        """Get or create user matcher with Snipe-IT + Azure AD users."""
         if self._user_matcher is None:
             logger.debug("Loading Snipe-IT users for matching...")
             users = self.snipe.get_all_users()
 
-            # Initialize AI resolver for ambiguous matches
+            # Load Azure AD users for cross-platform matching
+            logger.debug("Loading Azure AD users for cross-platform matching...")
+            azure_users = []
+            try:
+                from clients.azure import AzureClient
+                azure = AzureClient(
+                    tenant_id=self.config.azure.tenant_id,
+                    client_id=self.config.azure.client_id,
+                    client_secret=self.config.azure.client_secret,
+                    scope=self.config.azure.scope,
+                    timeout=self.config.api.timeout_seconds,
+                )
+                if self.config.azure.starters_group_id:
+                    azure_users = azure.get_group_members(self.config.azure.starters_group_id)
+                azure.close()
+                logger.debug(f"Loaded {len(azure_users)} Azure AD users")
+            except Exception as e:
+                logger.warning(f"Could not load Azure AD users: {e}")
+
+            # Initialize AI resolver
             ai_api_key = getattr(self.config, 'ai_api_key', '') or os.environ.get('AI_API_KEY', '')
             ai_resolver = AIResolver(api_key=ai_api_key) if ai_api_key else None
 
@@ -88,8 +107,9 @@ class UserMatchModule:
                 weight_bigram_dice=self.config.matching.weight_bigram_dice,
                 use_bigram_dice=self.config.matching.use_bigram_dice,
                 ai_resolver=ai_resolver,
+                azure_users=azure_users,
             )
-            logger.debug(f"Loaded {len(users)} users for matching")
+            logger.debug(f"Loaded {len(users)} Snipe-IT + {len(azure_users)} Azure AD users for matching")
         return self._user_matcher
     
     def _choose_model_id(self, model_identifier: str) -> int:

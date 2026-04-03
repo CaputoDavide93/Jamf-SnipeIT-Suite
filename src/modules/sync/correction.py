@@ -194,10 +194,27 @@ class CorrectionModule:
     # ------------------------------------------------------------------
 
     def _get_user_matcher(self) -> UserMatcher:
-        """Lazy-initialise the UserMatcher with all Snipe-IT users."""
+        """Lazy-initialise the UserMatcher with Snipe-IT + Azure AD users."""
         if self._user_matcher is None:
             logger.debug("Loading Snipe-IT users for correction matching...")
             users = self.snipe.get_all_users()
+
+            # Load Azure AD for cross-platform matching
+            azure_users = []
+            try:
+                from clients.azure import AzureClient
+                azure = AzureClient(
+                    tenant_id=self.config.azure.tenant_id,
+                    client_id=self.config.azure.client_id,
+                    client_secret=self.config.azure.client_secret,
+                    scope=self.config.azure.scope,
+                    timeout=self.config.api.timeout_seconds,
+                )
+                if self.config.azure.starters_group_id:
+                    azure_users = azure.get_group_members(self.config.azure.starters_group_id)
+                azure.close()
+            except Exception as e:
+                logger.warning(f"Could not load Azure AD users: {e}")
 
             ai_api_key = getattr(self.config, 'ai_api_key', '') or os.environ.get('AI_API_KEY', '')
             ai_resolver = AIResolver(api_key=ai_api_key) if ai_api_key else None
@@ -211,8 +228,9 @@ class CorrectionModule:
                 weight_bigram_dice=self.config.matching.weight_bigram_dice,
                 use_bigram_dice=self.config.matching.use_bigram_dice,
                 ai_resolver=ai_resolver,
+                azure_users=azure_users,
             )
-            logger.debug(f"Loaded {len(users)} users for correction matching")
+            logger.debug(f"Loaded {len(users)} Snipe-IT + {len(azure_users)} Azure AD users")
         return self._user_matcher
 
     def _validate_asset(
