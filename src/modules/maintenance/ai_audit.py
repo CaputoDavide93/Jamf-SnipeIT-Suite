@@ -17,7 +17,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.config import Config
 from core.client_factory import create_jamf_client, create_snipeit_client, create_slack_client
 from clients.azure import AzureClient
-from clients.hibob import HiBobClient
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +48,6 @@ class AIAuditModule:
             timeout=config.api.timeout_seconds,
         )
 
-        hibob_cfg = config._raw.get("hibob", {})
-        self.hibob = HiBobClient(
-            service_user_id=hibob_cfg.get("service_user_id", ""),
-            service_user_token=hibob_cfg.get("service_user_token", ""),
-            base_url=hibob_cfg.get("base_url", "https://api.hibob.com/v1"),
-        ) if hibob_cfg.get("service_user_id") else None
-
         api_key = getattr(config, 'ai_api_key', '') or os.environ.get('AI_API_KEY', '')
         self._llm = anthropic.Anthropic(api_key=api_key) if _LLM_AVAILABLE and api_key else None
 
@@ -84,12 +76,10 @@ class AIAuditModule:
             "azure_users": len(platform_data.get("azure_users", [])),
             "azure_disabled": len(platform_data.get("azure_disabled", [])),
             "azure_leavers": len(platform_data.get("azure_leavers", [])),
-            "hibob_employees": len(platform_data.get("hibob_employees", [])),
         }
         logger.info(f"  Jamf: {results['stats']['jamf_devices']} devices")
         logger.info(f"  Snipe-IT: {results['stats']['snipe_assets']} assets, {results['stats']['snipe_users']} users")
         logger.info(f"  Azure AD: {results['stats']['azure_users']} users, {results['stats']['azure_disabled']} disabled, {results['stats']['azure_leavers']} leavers")
-        logger.info(f"  HiBob: {results['stats']['hibob_employees']} employees")
 
         # Step 2: Build unified profiles
         logger.info("[2/4] Building unified user profiles...")
@@ -145,17 +135,6 @@ class AIAuditModule:
         data["azure_leavers"] = self.azure.get_group_members(
             self.config.azure.leavers_group_id
         ) if self.config.azure.leavers_group_id else []
-
-        # HiBob — all employees
-        if self.hibob:
-            logger.info("  Fetching HiBob employees...")
-            try:
-                data["hibob_employees"] = self.hibob.get_all_employees()
-            except Exception as e:
-                logger.warning(f"  HiBob fetch failed: {e}")
-                data["hibob_employees"] = []
-        else:
-            data["hibob_employees"] = []
 
         return data
 
@@ -264,7 +243,6 @@ class AIAuditModule:
 - Snipe-IT: {total_snipe_users} users, {users_with_assets} with assets
 - Jamf: {len(data.get('jamf_devices', []))} managed devices
 - Azure AD: {len(data.get('azure_disabled', []))} disabled, {len(data.get('azure_leavers', []))} leavers
-- HiBob: {len(data.get('hibob_employees', []))} employees
 
 ## Issues Found (pre-computed)
 
