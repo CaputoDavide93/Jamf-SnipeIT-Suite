@@ -55,6 +55,7 @@ from modules.maintenance import (
     CleanupModule,
     UsernameStandardizer,
 )
+from modules.maintenance.ai_audit import AIAuditModule
 
 
 # Global state
@@ -326,6 +327,15 @@ def run_user_enrichment(dry_run: bool = False) -> Dict:
         module.close()
 
 
+def run_ai_audit(dry_run: bool = False) -> Dict:
+    """Run AI Cross-Platform Audit."""
+    module = AIAuditModule(config)
+    try:
+        return module.run(dry_run=dry_run)
+    finally:
+        module.close()
+
+
 def run_all_modules_startup(dry_run: bool = False):
     """
     Run all modules on startup with RunContext for shared data and metrics.
@@ -449,11 +459,13 @@ def on_demand_menu():
     print("  14. Username Standardize (DRY RUN)")
     print("  15. User Enrichment - Push Azure AD fields to Snipe-IT users")
     print("  16. User Enrichment (DRY RUN)")
+    print("  17. AI Cross-Platform Audit")
+    print("  18. AI Cross-Platform Audit (DRY RUN)")
     print("  0.  Cancel - Return to scheduler")
     print("="*60)
-    
+
     try:
-        choice = input("\n  Enter your choice (0-16): ").strip()
+        choice = input("\n  Enter your choice (0-18): ").strip()
     except EOFError:
         return
     
@@ -496,6 +508,10 @@ def on_demand_menu():
         run_module_safe("User Enrichment", run_user_enrichment, dry_run)
     elif choice == '16':
         run_module_safe("User Enrichment (DRY)", run_user_enrichment, dry_run=True)
+    elif choice == '17':
+        run_module_safe("AI Audit", run_ai_audit, dry_run)
+    elif choice == '18':
+        run_module_safe("AI Audit (DRY)", run_ai_audit, dry_run=True)
     else:
         print("  Invalid choice.")
     
@@ -651,7 +667,18 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             name='Peripherals Sync (HiBob)'
         )
         logger.info(f"  Peripherals Sync: {cron}")
-    
+
+    # Add AI Audit job (weekly, after cleanup)
+    if jobs_config.get('ai_audit', {}).get('enabled', False):
+        cron = jobs_config['ai_audit'].get('cron', '0 4 * * 0')
+        scheduler.add_job(
+            lambda: run_module_safe("AI Audit", run_ai_audit),
+            CronTrigger.from_crontab(cron),
+            id='ai_audit',
+            name='AI Cross-Platform Audit'
+        )
+        logger.info(f"  AI Audit: {cron}")
+
     return scheduler
 
 
