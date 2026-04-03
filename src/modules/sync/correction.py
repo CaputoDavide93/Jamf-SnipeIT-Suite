@@ -329,7 +329,32 @@ class CorrectionModule:
             results["correct_assignments"] += 1
             return
 
-        # ---- Mismatch detected ----
+        # ---- Safety: only auto-correct on EXACT matches ----
+        # Fuzzy and AI matches can be wrong (e.g. Jane Winters -> Jane Porter
+        # when it should be Jane Sommers who changed surname).
+        # If current assignment is to an active user and the match is fuzzy/AI,
+        # DON'T auto-correct — just report to Slack for investigation.
+        is_exact_match = match_reason and match_reason.startswith(("full_name=", "email=", "email_prefix=", "username=", "username_normalized="))
+        if not is_exact_match and not current_is_disabled:
+            logger.info(
+                f"Asset {asset_id} ({serial}): fuzzy/AI match suggests "
+                f"'{expected_user_name}' but currently assigned to active user "
+                f"'{current_user_name}' — keeping current, sending to Slack"
+            )
+            results["details"].append({
+                "type": "mismatch",
+                "description": (
+                    f"`{serial}` *{asset_name}*\n"
+                    f"      Currently: *{current_user_name}* (active)\n"
+                    f"      Local account `{primary_username}` fuzzy-matches: *{expected_user_name}*\n"
+                    f"      Match type: {match_reason}\n"
+                    f"      Action: Kept current assignment — needs manual review"
+                ),
+            })
+            results["correct_assignments"] += 1
+            return
+
+        # ---- Mismatch detected (exact match disagrees with assignment) ----
         results["mismatches_found"] += 1
         mismatch_desc = (
             f"`{serial}` *{asset_name}*\n"

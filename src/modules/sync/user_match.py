@@ -427,9 +427,18 @@ class UserMatchModule:
                 # Already assigned to correct user — no action needed
                 logger.debug(f"Asset {asset_id} already correctly assigned to user {snipe_user_id}, skipping")
             elif current_uid and current_uid != int(snipe_user_id):
-                # Different user assigned
-                if allow_reassignment:
-                    # Safety check: log the old and new users for audit trail
+                # Different user assigned — only reassign on exact matches
+                match_type = debug_info.get("exact_hit_reason", "")
+                is_exact = match_type.startswith(("full_name=", "email=", "email_prefix=", "username=", "username_normalized="))
+
+                if not is_exact and allow_reassignment:
+                    # Fuzzy/AI match — don't reassign, just log
+                    logger.info(
+                        f"Asset {asset_id}: fuzzy/AI suggests user {snipe_user_id} "
+                        f"but currently assigned to {current_uid} — keeping current"
+                    )
+                elif allow_reassignment and is_exact:
+                    # Exact match disagrees with current — safe to reassign
                     action = "reassign"
                     if dry_run:
                         logger.info(f"[DRY-RUN] Would reassign asset {asset_id} from user {current_uid} to user {snipe_user_id}")
