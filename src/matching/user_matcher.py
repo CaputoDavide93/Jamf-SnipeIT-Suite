@@ -101,6 +101,7 @@ class UserMatcher:
         # Build lookup indexes
         self._by_email: Dict[str, Dict] = {}
         self._by_username: Dict[str, Dict] = {}
+        self._by_username_norm: Dict[str, List[Dict]] = {}  # normalised username lookup
         self._by_name: Dict[str, List[Dict]] = {}
         self._by_email_prefix: Dict[str, List[Dict]] = {}
 
@@ -117,6 +118,10 @@ class UserMatcher:
                     self._by_email_prefix.setdefault(prefix_norm, []).append(user)
             if username:
                 self._by_username[username] = user
+                # Normalised username (strip @domain, dots, dashes, underscores)
+                uname_clean = username.split("@")[0].replace(".", "").replace("-", "").replace("_", "")
+                if uname_clean:
+                    self._by_username_norm.setdefault(uname_clean, []).append(user)
             if name:
                 self._by_name.setdefault(name, []).append(user)
 
@@ -128,11 +133,23 @@ class UserMatcher:
     def find_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         return self._by_username.get(username.lower().strip())
 
-    def find_by_name(self, full_name: str) -> Optional[Dict[str, Any]]:
+    def find_by_name(self, full_name: str, username_hint: str = "") -> Optional[Dict[str, Any]]:
         matches = self._by_name.get(normalize_name(full_name), [])
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
+            # Try to disambiguate using the Jamf username as email prefix
+            # e.g. two "Ivaylo Dimitrov" but username "ivaylodimitrov" matches
+            # ivaylo.dimitrov@ (not ivaylo.dimitrov1@)
+            if username_hint:
+                hint_norm = username_hint.lower().replace(".", "").replace("-", "").replace("_", "")
+                for m in matches:
+                    m_email = (m.get("email") or "").lower()
+                    m_prefix = m_email.split("@")[0].replace(".", "").replace("-", "").replace("_", "")
+                    if m_prefix == hint_norm:
+                        logger.debug(f"Disambiguated '{full_name}' via email prefix: {m.get('email')}")
+                        return m
+
             details = [
                 f"{m.get('name', '?')} (id={m.get('id')}, email={m.get('email', '?')})"
                 for m in matches
@@ -167,6 +184,16 @@ class UserMatcher:
             return None
         return None
 
+    def find_by_username_normalized(self, username: str) -> Optional[Dict[str, Any]]:
+        """Find user by normalised username (strip @domain, dots, dashes).
+        Catches cases like janewinters -> jane.winters@company.com
+        even when the user changed their surname."""
+        norm = username.lower().strip().replace(".", "").replace("-", "").replace("_", "")
+        matches = self._by_username_norm.get(norm, [])
+        if len(matches) == 1:
+            return matches[0]
+        return None  # ambiguous or not found
+
     # ----- best match -----
 
     def best_match(
@@ -183,8 +210,9 @@ class UserMatcher:
         debug_info: Dict[str, Any] = {"exact_hit_reason": None, "top_candidates": []}
 
         # PRIORITY 1: exact full name (from Jamf local user — most accurate)
+        # Pass username as hint to disambiguate same-name users via email
         if full_name_hint and " " in full_name_hint.strip():
-            exact = self.find_by_name(full_name_hint)
+            exact = self.find_by_name(full_name_hint, username_hint=username)
             if exact:
                 debug_info["exact_hit_reason"] = f"full_name={full_name_hint}"
                 return exact, debug_info
@@ -219,7 +247,7 @@ class UserMatcher:
 
         # PRIORITY 3b: single-word full name (less reliable, try after email)
         if full_name_hint and " " not in full_name_hint.strip():
-            exact = self.find_by_name(full_name_hint)
+            exact = self.find_by_name(full_name_hint, username_hint=username)
             if exact:
                 debug_info["exact_hit_reason"] = f"full_name={full_name_hint}"
                 return exact, debug_info
@@ -233,6 +261,15 @@ class UserMatcher:
                 else:
                     debug_info["exact_hit_reason"] = f"username={username}"
                     return exact, debug_info
+
+        # PRIORITY 4b: normalised username (catches surname changes, e.g.
+        # Jamf local account "janewinters" -> Snipe-IT user "jane.winters@company.com"
+        # even though Snipe-IT name is now "Jane Sommers")
+        if username:
+            norm_match = self.find_by_username_normalized(username)
+            if norm_match:
+                debug_info["exact_hit_reason"] = f"username_normalized={username}"
+                return norm_match, debug_info
 
         # PRIORITY 5: fuzzy
         if not full_name_hint:
