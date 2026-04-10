@@ -2,12 +2,8 @@
 # Multi-stage build for optimized image size
 # Supports both AMD64 (Intel) and ARM64 (Apple Silicon M1/M2/M3)
 
-# Stage 1: Builder
-FROM --platform=$BUILDPLATFORM python:3.14-rc-slim AS builder
-
-# Build arguments for multi-arch support
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
+# Stage 1: Builder (must match target platform for binary extensions like pydantic_core)
+FROM python:3.13-slim AS builder
 
 WORKDIR /build
 
@@ -27,7 +23,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 
 # Stage 2: Runtime
-FROM python:3.14-rc-slim
+FROM python:3.13-slim
 
 LABEL maintainer="Davide Caputo <CaputoDav@gmail.com>"
 LABEL description="Jamf-SnipeIT Suite - Unified Asset Management Tool"
