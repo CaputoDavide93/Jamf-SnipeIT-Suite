@@ -81,9 +81,16 @@ class UserMatcher:
         use_bigram_dice: bool = True,
         ai_resolver=None,
         azure_users: Optional[List[Dict[str, Any]]] = None,
+        overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     ):
         self.email_domain = email_domain.lower().lstrip("@")
         self.ai_resolver = ai_resolver
+        # Manual overrides: { jamf_local_username: {snipe_user_id: int, ...} }
+        # Normalised keys: lowercased, dots/dashes/underscores stripped
+        self.overrides = {}
+        for k, v in (overrides or {}).items():
+            norm_key = k.lower().replace(".", "").replace("-", "").replace("_", "")
+            self.overrides[norm_key] = v
 
         # Collect ambiguous / rejected matches so callers can report them
         self.warnings: List[Dict[str, Any]] = []
@@ -218,6 +225,19 @@ class UserMatcher:
         Returns (user | None, debug_info).
         """
         debug_info: Dict[str, Any] = {"exact_hit_reason": None, "top_candidates": []}
+
+        # PRIORITY 0: manual overrides (config/user_overrides.json)
+        # For users we already know about (surname changes, custom names, etc.)
+        if username:
+            norm_uname = username.lower().replace(".", "").replace("-", "").replace("_", "")
+            override = self.overrides.get(norm_uname)
+            if override:
+                target_id = override.get("snipe_user_id")
+                for u in self.users:
+                    if u.get("id") == target_id:
+                        debug_info["exact_hit_reason"] = f"override (id={target_id}: {override.get('reason', '')})"
+                        return u, debug_info
+                logger.warning(f"Override for '{username}' points to user id={target_id} but not found in Snipe-IT")
 
         # PRIORITY 1: exact full name (from Jamf local user — most accurate)
         # Pass username as hint to disambiguate same-name users via email

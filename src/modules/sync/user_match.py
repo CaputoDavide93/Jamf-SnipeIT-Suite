@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.config import Config
-from core.client_factory import create_jamf_client, create_snipeit_client, create_slack_client
+from core.client_factory import create_jamf_client, create_snipeit_client, create_slack_client, load_user_overrides
 from infra.audit_csv import AuditCSV
 from infra.progress import ProgressTracker
 from infra.helpers import rate_limit_delay
@@ -108,6 +108,7 @@ class UserMatchModule:
                 use_bigram_dice=self.config.matching.use_bigram_dice,
                 ai_resolver=ai_resolver,
                 azure_users=azure_users,
+                overrides=load_user_overrides(),
             )
             logger.debug(f"Loaded {len(users)} Snipe-IT + {len(azure_users)} Azure AD users for matching")
         return self._user_matcher

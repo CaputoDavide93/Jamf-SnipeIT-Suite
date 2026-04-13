@@ -2,11 +2,38 @@
 Client factory — centralised creation of API clients from config.
 Eliminates ~150 lines of duplicated initialization across modules.
 """
+import json
+import logging
+from pathlib import Path
+from typing import Any, Dict
+
 from core.config import Config
 from clients.jamf import JamfClient
 from clients.snipeit import SnipeITClient
 from clients.azure import AzureClient
 from clients.slack import SlackClient
+
+logger = logging.getLogger(__name__)
+
+
+def load_user_overrides(path: str = "config/user_overrides.json") -> Dict[str, Any]:
+    """Load manual user matching overrides. Empty dict if file missing."""
+    p = Path(path)
+    if not p.exists():
+        # Try Docker default location
+        p = Path("/app/config/user_overrides.json")
+    if not p.exists():
+        return {}
+    try:
+        with open(p, "r") as f:
+            data = json.load(f)
+        overrides = data.get("overrides", {})
+        if overrides:
+            logger.info(f"Loaded {len(overrides)} user matching overrides from {p}")
+        return overrides
+    except Exception as e:
+        logger.warning(f"Could not load user overrides from {p}: {e}")
+        return {}
 
 
 def create_jamf_client(config: Config) -> JamfClient:

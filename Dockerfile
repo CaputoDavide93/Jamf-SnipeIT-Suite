@@ -41,8 +41,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY src/ ./src/
 
-# Copy non-secret config files (mapping tables, model maps)
+# Copy non-secret config files (mapping tables, model maps, user overrides)
 COPY config/equipment_mapping.json ./config/equipment_mapping.json
+COPY config/user_overrides.json ./config/user_overrides.json
 COPY config/model_map.json* ./config/
 
 # Copy entrypoint script
