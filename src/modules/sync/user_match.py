@@ -450,7 +450,7 @@ class UserMatchModule:
             elif current_uid and current_uid != int(snipe_user_id):
                 # Different user assigned — only reassign on exact matches
                 match_type = debug_info.get("exact_hit_reason", "")
-                is_exact = match_type.startswith(("full_name=", "email=", "email_prefix=", "username=", "username_normalized="))
+                is_exact = match_type.startswith(("full_name=", "email=", "email_prefix=", "username=", "username_normalized=", "override"))
 
                 if not is_exact and allow_reassignment:
                     # Fuzzy/AI match — don't reassign, just log

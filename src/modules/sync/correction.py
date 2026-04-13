@@ -353,7 +353,7 @@ class CorrectionModule:
         # when it should be Jane Sommers who changed surname).
         # If current assignment is to an active user and the match is fuzzy/AI,
         # DON'T auto-correct — just report to Slack for investigation.
-        is_exact_match = match_reason and match_reason.startswith(("full_name=", "email=", "email_prefix=", "username=", "username_normalized="))
+        is_exact_match = match_reason and match_reason.startswith(("full_name=", "email=", "email_prefix=", "username=", "username_normalized=", "override"))
         if not is_exact_match and not current_is_disabled:
             logger.info(
                 f"Asset {asset_id} ({serial}): fuzzy/AI match suggests "
