@@ -374,6 +374,8 @@ class CorrectionModule:
             return
 
         # ---- Mismatch detected (exact match disagrees with assignment) ----
+        # Auto-correctable cases DON'T go to Slack — Slack only for manual-review.
+        # Will be appended to results["details"] only if correction fails below.
         results["mismatches_found"] += 1
         mismatch_desc = (
             f"`{serial}` *{asset_name}*\n"
@@ -382,10 +384,6 @@ class CorrectionModule:
             f"      Match type: {match_reason}"
         )
         logger.warning(f"MISMATCH: {mismatch_desc}")
-        results["details"].append({
-            "type": "mismatch",
-            "description": mismatch_desc,
-        })
 
         if dry_run:
             audit.write(
@@ -412,6 +410,10 @@ class CorrectionModule:
         if not checkin_ok:
             logger.error(f"Correction failed: could not check-in asset {asset_id}")
             results["errors"] += 1
+            results["details"].append({
+                "type": "mismatch",
+                "description": f"{mismatch_desc}\n      *Action failed:* Check-in failed — manual fix needed",
+            })
             audit.write(
                 serial=serial,
                 asset_id=str(asset_id),
@@ -466,8 +468,16 @@ class CorrectionModule:
             )
             if rollback_ok:
                 logger.info(f"Rollback successful: asset {asset_id} back to user {current_uid}")
+                results["details"].append({
+                    "type": "mismatch",
+                    "description": f"{mismatch_desc}\n      *Action failed:* Checkout to expected user failed, restored original",
+                })
             else:
                 logger.error(f"ROLLBACK FAILED: asset {asset_id} is now unassigned!")
+                results["details"].append({
+                    "type": "mismatch",
+                    "description": f"{mismatch_desc}\n      *Action failed:* Checkout AND rollback failed — asset unassigned, manual fix needed",
+                })
 
             results["errors"] += 1
             audit.write(

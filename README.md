@@ -4,116 +4,177 @@
   <img src="https://img.shields.io/badge/Azure%20AD-blue?style=for-the-badge&logo=microsoftazure" alt="Azure AD"/>
   <img src="https://img.shields.io/badge/HiBob-orange?style=for-the-badge" alt="HiBob"/>
   <img src="https://img.shields.io/badge/AWS-Fargate-FF9900?style=for-the-badge&logo=amazonaws" alt="AWS Fargate"/>
+  <img src="https://img.shields.io/badge/AI-powered-7B42BC?style=for-the-badge" alt="AI"/>
 </p>
 
 # Jamf-SnipeIT Suite
 
-> **Unified Asset Management & Synchronization Platform**
+> **Unified Asset Management & Synchronisation Platform with AI-powered matching**
 
-Automated synchronization of devices, users, and accessories between **Jamf Pro**, **Snipe-IT**, **Azure AD/Microsoft Entra ID**, and **HiBob**. Runs as a scheduled ECS Fargate task on AWS.
-
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.14-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.14"/>
-  <img src="https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker"/>
-  <img src="https://img.shields.io/badge/terraform-IaC-7B42BC?style=flat-square&logo=terraform" alt="Terraform"/>
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License"/>
-</p>
+Automated daily synchronisation of devices, users, and accessories between **Jamf Pro**, **Snipe-IT**, **Azure AD / Microsoft Entra ID**, and **HiBob**. Runs as an ECS Fargate scheduled task on AWS with zero-touch user provisioning.
 
 ---
 
-## Data Flow & Sources of Truth
+## Table of Contents
+
+- [What it does](#what-it-does)
+- [Data flow & sources of truth](#data-flow--sources-of-truth)
+- [Modules](#modules)
+- [Matching engine](#matching-engine)
+- [AI features](#ai-features)
+- [Deployment](#deployment)
+- [Configuration](#configuration)
+- [Operations](#operations)
+- [Documentation](#documentation)
+
+---
+
+## What it does
+
+Every morning at 6am UTC, the suite:
+
+1. **Provisions new starters** from Azure AD into Snipe-IT
+2. **Enriches** existing Snipe-IT profiles with job titles, departments, phone numbers from Azure
+3. **Matches** every Jamf computer to its Snipe-IT user based on the actual local account on the machine
+4. **Auto-creates** Snipe-IT users for anyone who has a Mac but isn't in Snipe-IT yet (pulled from Azure AD)
+5. **Self-heals** wrong assignments by cross-referencing all 3 platforms
+6. **Marks pending** assets for leavers (Azure AD) while keeping the assignment for tracking
+7. **Syncs HiBob equipment** into Snipe-IT accessories with name normalisation
+8. **Posts to Slack** any case a human needs to review
+
+No manual intervention needed for the 95% happy path. Ambiguous cases go to a Slack channel for review.
+
+---
+
+## Data flow & sources of truth
 
 ```
-                  Azure AD                          HiBob
-                (disabled/leavers,              (equipment/
-                 job titles, depts)              accessories)
-                      |                              |
-                      v                              v
-  Jamf Pro  -----> Snipe-IT <----- HiBob Sync
-  (local user      (asset inventory,
-   accounts)        user records)
-      |                |
-      |   confirmed    |
-      +--- match ----->+ (checkout asset to matched user)
-      |                |
-      +<-- EA only ----+ (Snipe-IT asset ID written to Jamf)
-      |                |
-      +<-- verified ---+ (confirmed name/email written to Jamf location)
-          data only
+ Azure AD                          HiBob
+ (leavers, starters,             (equipment,
+  job titles, depts)              accessories)
+       |                              |
+       v                              v
+  Jamf Pro  ---------> Snipe-IT <---- HiBob Sync
+  (local user           (asset inventory,
+   accounts)             user records,
+                         accessories)
+      |                     |
+      |   confirmed          |
+      +--- match ----------->+ (checkout asset to user)
+      |                      |
+      +<-- EA only ----------+ (Snipe-IT asset ID written to Jamf)
+      |                      |
+      +<-- verified ---------+ (confirmed name/email written back)
+           data only
 ```
 
 | System | Source of truth for |
-|--------|-------------------|
-| **Jamf Local Accounts** | Who uses each machine (username, full name) |
-| **Azure AD** | Disabled/leaver status, job titles, departments |
+|--------|---------------------|
+| **Jamf Local Accounts** | Who actually uses each machine (username + full name from the Mac) |
+| **Azure AD** | Employee lifecycle — disabled/leaver status, job titles, departments |
 | **HiBob** | Equipment/accessories assigned to employees |
-| **Snipe-IT** | Asset inventory (consumer - receives data from all sources) |
+| **Snipe-IT** | Asset inventory (consumer — receives data, never feeds back to identity fields) |
+
+**The golden rule:** user identity information flows *into* Snipe-IT, never out of Snipe-IT into Jamf or Azure unless verified by a confirmed cross-platform match.
 
 ---
 
 ## Modules
 
-| Module | Schedule | Description |
-|--------|----------|-------------|
-| **Azure Starters** | Mon 6am | Create Snipe-IT users from Azure AD starters group |
-| **User Enrichment** | Mon 6:30am | Push Azure AD fields (job title, dept) to Snipe-IT |
-| **Model Sync** | Sun 1am | Ensure hardware models exist in Snipe-IT |
-| **Correction** | Daily 6:15am | Validate assignments, fix mismatches, rollback on failure |
-| **User Match** | Daily 6:30am | Match Jamf computers to Snipe-IT users, checkout assets |
-| **Snipe-to-Jamf** | Daily 7am | Write asset ID EA to Jamf (identity fields untouched) |
-| **Leavers** | Daily 7:30am | Set Pending status for disabled users (keep assigned) |
-| **Peripherals Sync** | Mon 8am | Sync HiBob equipment to Snipe-IT accessories |
-| **Cleanup** | Sun 3am | Merge duplicate users, remove junk accounts |
-| **Reconciliation** | On-demand | Cross-platform inventory diff with CSV export |
-| **Username Standardize** | On-demand | Strip @domain from Snipe-IT usernames |
-| **WakeUp** | On-demand | Send MDM redeploy commands |
+### Daily (every day)
+| Module | Time | Description |
+|--------|------|-------------|
+| **Correction** | 06:15 | Validates existing Snipe-IT assignments against Jamf local accounts. Auto-corrects mismatches on exact matches; flags fuzzy/AI mismatches for Slack review. |
+| **User Match** | 06:30 | Main provisioning. Matches Jamf computers to Snipe-IT users, creates assets, checks out. Auto-creates Snipe-IT users from Azure AD if needed. |
+| **Snipe-to-Jamf** | 07:00 | Writes Snipe-IT asset ID EA back to Jamf (identity fields are never touched). |
+| **Leavers** | 07:30 | Sets Pending status on assets for disabled/leaver Azure AD users. Keeps the assignment for tracking. |
+
+### Weekly
+| Module | Time | Description |
+|--------|------|-------------|
+| **Model Sync** | Sun 01:00 | Ensures hardware models exist in Snipe-IT, creates missing ones. |
+| **Username Standardize** | Sun 02:30 | Strips `@domain` from Snipe-IT usernames for consistency. |
+| **Cleanup** | Sun 03:00 | Merges duplicate users, removes junk accounts. |
+| **AI Audit** | Sun 04:00 | **AI-powered cross-platform audit** — finds security risks, data inconsistencies, anomalies. Posts structured Slack report. |
+| **Reconciliation** | Sun 05:00 | Inventory diff Jamf ↔ Snipe-IT. Identifies devices in one system but not the other. |
+| **Azure Starters** | Mon 06:00 | Creates Snipe-IT users for new hires from Azure AD starters group. |
+| **User Enrichment** | Mon 06:30 | Pushes Azure AD job titles, departments, phone numbers to Snipe-IT. |
+| **Peripherals Sync** | Mon 08:00 | Syncs HiBob equipment to Snipe-IT accessories with name mapping. |
+
+### On-demand
+| Module | Description |
+|--------|-------------|
+| **WakeUp** | Sends MDM redeploy commands to unresponsive Jamf devices. |
 
 ---
 
-## User Matching
+## Matching engine
 
-The matching engine identifies which Snipe-IT user owns each Jamf computer by inspecting the **local user accounts** on the machine (not the Jamf location fields, which may be stale).
+The matching engine identifies which Snipe-IT user owns each Jamf computer. Priority order:
 
-### Priority order
+### Priority 0 — Manual overrides
+`config/user_overrides.json` holds permanent mappings for edge cases (surname changes, custom local account names, test accounts). Fastest path, zero API calls.
 
-1. **Full name** - exact match against Snipe-IT user names
-2. **Email** - original Jamf location email (if available) for direct lookup
-3. **Email prefix** - normalised username as email prefix (dot/dash insensitive)
-4. **Username** - exact username match
-5. **Fuzzy** - LCS + bigram Dice coefficient + surname bonus (min score 14, 20% margin)
-6. **AI Resolver** - when fuzzy is ambiguous, an LLM reasons about nicknames, typos, and disabled users
+### Priority 1 — Full name
+Exact match against Snipe-IT user names. Disambiguates same-name users via email.
 
-### AI Resolver
+### Priority 2 — Email
+Uses the original Jamf location email directly (`jane.doe@company.com`) before falling back to reconstructed email.
 
-When the fuzzy matcher can't decide (margin < 20% between top candidates), an LLM evaluates all context:
+### Priority 3 — Email prefix
+Normalised prefix match (dots/dashes/underscores ignored).
 
-- Resolves nicknames: Tom -> Thomas, Jonny -> Jonathan, Rich -> Richard
-- Detects typos: "James Fird" -> James Ford
-- Prefers active users over disabled ones
-- Returns `null` when genuinely uncertain (sent to Slack for manual review)
+### Priority 4 — Username
+Exact username match, case-insensitive.
+
+### Priority 4b — Normalised username
+Catches surname changes: Jamf local account `janewinters` still matches Snipe-IT user with username `jane.winters@company.com` even after the Snipe-IT name changed to "Jane Sommers".
+
+### Priority 5 — Fuzzy
+LCS + bigram Dice coefficient with surname bonus. Minimum score 14, required margin 20% between top two candidates.
+
+### Priority 6 — AI cross-platform resolver
+When fuzzy rejects, the LLM reasons about the local account + all candidates + Azure AD data. Resolves:
+- Nicknames: Tom → Thomas, Jonny → Jonathan, Rich → Richard
+- Typos: "James Fird" → James Ford
+- Surname changes via Azure aliases: `janewinters` → Jane Sommers
+- Can decide to keep current assignment if AI concludes the Jamf local account is stale (old surname)
+
+### Priority 7 — Auto-create from Azure
+If nothing matches in Snipe-IT but the Jamf local user exists in Azure AD as active, the system creates the Snipe-IT user automatically with their Azure data and assigns the machine.
 
 ### Safety rules
-
-- **Never reassign from active user to disabled user** (e.g. Kerensa Martin keeps the machine even though Chris Martin's old account is still on it)
-- **Checkout failure rollback** - if checkout fails after check-in, re-assigns to original user
-- **Pending assets untouched** - neither User Match nor Correction modify Pending assets
-
----
-
-## Leavers Handling
-
-When a user appears in the Azure AD leavers/disabled group:
-
-1. Asset status set to **Pending** (protects from re-provisioning)
-2. Asset **stays assigned** to the leaver (for tracking who had it)
-3. User name prefixed with `[Disabled]` (disabled group only)
-4. Machine awaits manual collection and reassignment
+- **Never reassign from active user to disabled user** even if local account name suggests it
+- **Only auto-correct on exact matches** — fuzzy/AI mismatches go to Slack for human review instead
+- **Pending assets untouched** by User Match or Correction
+- **Checkout failure rollback** — reverts to original user if new checkout fails
 
 ---
 
-## AWS Infrastructure (Terraform)
+## AI features
 
-Deployed to **ECS Fargate** with all resources managed by Terraform.
+### AI Resolver (matching)
+- Model: Claude Haiku (fast, cheap)
+- Called only when fuzzy matching is ambiguous
+- Cross-references Snipe-IT + Azure AD data
+- Persistent cache in S3 (30-day TTL) — same query = 0 API calls
+- Rate-limit circuit breaker — if the API returns usage-limit errors, AI is disabled for the rest of the run
+
+### AI Audit (weekly)
+- Model: Claude Sonnet (deep reasoning)
+- Runs every Sunday at 04:00 UTC
+- Collects data from Jamf + Snipe-IT + Azure AD
+- Identifies: security risks, compliance gaps, users with excessive devices, untracked assets, offboarding process gaps
+- Posts structured Slack report with severity ratings and specific recommendations
+
+### Cost
+~$0.10–$0.50/month for typical operation (most calls hit the cache).
+
+---
+
+## Deployment
+
+### AWS Fargate (production)
 
 ```
 terraform/
@@ -123,81 +184,62 @@ terraform/
     iam.tf           Execution role, task role, EventBridge role
     secrets.tf       12 SSM SecureString parameters
     eventbridge.tf   Daily 6am UTC scheduled trigger
-    cloudwatch.tf    Log group (90-day retention) + optional alarm
-  environments/prod/            # Production root
+    cloudwatch.tf    Log group (90-day retention)
+    s3_cache.tf      AI resolver cache bucket
+  environments/prod/
     main.tf          Provider (account-locked), module call
 ```
 
-### Security
+**Security hardening:**
+- Account lock: `allowed_account_ids = ["<AWS_ACCOUNT_ID>"]`
+- Region lock: `eu-west-1` only
+- All 12 credentials in SSM SecureString (encrypted at rest, not visible in task definition)
+- Egress-only security group (no inbound)
+- IAM least privilege (SSM parameters scoped to this project only)
+- Sanitised logging (no credentials in CloudWatch)
+- Random 24-char passwords for auto-created users
 
-| Measure | Detail |
-|---------|--------|
-| Account lock | `allowed_account_ids = ["<AWS_ACCOUNT_ID>"]` |
-| Region lock | Validation: `eu-west-1` only |
-| Secrets | All 12 credentials in SSM SecureString (encrypted at rest) |
-| Network | Egress-only security group, no inbound |
-| Logging | Debug output sanitised, no credentials in logs |
-| Passwords | Random 24-char per new user (no static default) |
-| Tags | All resources: `Owner: Davide Caputo - TechOps` |
-
-### Estimated cost
-
-~$2-5/month (Fargate pay-per-use, ~30min/day + ECR storage + CloudWatch)
+**Cost:** ~$2–5/month (Fargate pay-per-use, ~30min/day + ECR storage + CloudWatch + AI API)
 
 ### Deploy
 
 ```bash
 cd terraform/environments/prod
-cp terraform.tfvars.example terraform.tfvars  # fill in secrets
+cp terraform.tfvars.example terraform.tfvars   # fill in secrets
 terraform init
 terraform plan
 terraform apply
 
 # Push Docker image
-aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin <ECR_URL>
+aws ecr get-login-password --region eu-west-1 | \
+  docker login --username AWS --password-stdin <ECR_URL>
 docker build --platform linux/amd64 -t <ECR_URL>:latest .
 docker push <ECR_URL>:latest
 ```
 
----
+EventBridge triggers the task automatically at 06:00 UTC daily.
 
-## Docker (Local)
-
-### Scheduler mode (default)
+### Local / Docker Compose (development)
 
 ```bash
-docker compose up -d          # Start with daily schedule
-docker attach jamf-snipeit    # Type NOW for on-demand menu
-docker compose logs -f        # View logs
-```
-
-### Run once
-
-```bash
-docker compose --profile run-once run --rm run-once
-```
-
-### CLI mode
-
-```bash
-docker compose run --rm cli leavers --dry-run
-docker compose run --rm cli user-match --dry-run
-```
-
-### Dry run (no changes)
-
-```bash
+# Dry run all modules
 docker compose --profile run-once run --rm -e DRY_RUN=true run-once
+
+# Run scheduler mode (daily cron)
+docker compose up -d
+
+# Single module
+docker compose run --rm cli user-match --dry-run
 ```
 
 ---
 
 ## Configuration
 
-### Config file (local/Docker Compose)
+### Two config modes
 
+**1. YAML file** (`config/config.yaml`) — used for local development
 ```yaml
-# config/config.yaml (never commit - gitignored)
 jamf:
   base_url: "https://your-instance.jamfcloud.com"
   username: "api-user"
@@ -208,64 +250,66 @@ snipeit:
   api_token: "your-token"
 
 azure:
-  tenant_id: "your-tenant-id"
-  client_id: "your-client-id"
-  client_secret: "your-secret"
-  leavers_group_id: "group-guid"
-  disabled_group_id: "group-guid"
-  starters_group_id: "group-guid"
+  tenant_id: "..."
+  client_id: "..."
+  client_secret: "..."
+  leavers_group_id: "..."
+  disabled_group_id: "..."
+  starters_group_id: "..."
 
 matching:
   email_domain: "company.com"
   skip_usernames:
     - "admin"
     - "shared"
-    - "guest"
 ```
 
-### Environment variables (Fargate/serverless)
+**2. Environment variables** — used for Fargate (no config file mounted)
 
-When no config.yaml is present, all settings are read from environment variables:
+Every YAML key has an env var equivalent: `JAMF_BASE_URL`, `SNIPEIT_API_TOKEN`, `AZURE_CLIENT_SECRET`, etc. The app automatically uses env vars when `config.yaml` is missing.
 
-| Variable | Description |
-|----------|-------------|
-| `JAMF_BASE_URL` | Jamf Pro URL |
-| `JAMF_USERNAME` / `JAMF_PASSWORD` | Jamf credentials |
-| `SNIPEIT_BASE_URL` / `SNIPEIT_API_TOKEN` | Snipe-IT credentials |
-| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | Azure AD |
-| `AZURE_LEAVERS_GROUP_ID` / `AZURE_DISABLED_GROUP_ID` / `AZURE_STARTERS_GROUP_ID` | Azure groups |
-| `SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID` | Slack notifications |
-| `HIBOB_SERVICE_USER_ID` / `HIBOB_SERVICE_USER_TOKEN` | HiBob API |
-| `AI_API_KEY` | LLM API key for AI resolver |
-| `MATCHING_EMAIL_DOMAIN` | Email domain for matching |
-| `MATCHING_SKIP_USERNAMES` | Comma-separated skip list |
+### User overrides (`config/user_overrides.json`)
 
----
+For edge cases that matching can't solve automatically:
 
-## Slack Notifications
+```json
+{
+  "overrides": {
+    "janewinters": {
+      "snipe_user_id": 687,
+      "snipe_user_name": "Jane Sommers",
+      "reason": "Surname change after marriage"
+    }
+  }
+}
+```
 
-Sent to the configured channel for:
-
-- **Correction mismatches** - assets assigned to wrong user, needs investigation
-- **Unmatched devices** - local account couldn't be matched to any Snipe-IT user (AI also couldn't resolve)
-- **Ambiguous name matches** - duplicate users in Snipe-IT need merging
-- **Module failures** - error details with stack trace
-- **Run summary** - only on errors (no news is good news)
+Baked into the Docker image. Takes precedence over all matching logic.
 
 ---
 
-## Project Structure
+## Operations
+
+- **[OPERATIONS.md](OPERATIONS.md)** — day-to-day tasks (adding overrides, checking logs, investigating alerts)
+- **[SECURITY.md](SECURITY.md)** — security policy, credential rotation, reporting vulnerabilities
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — contribution guidelines
+
+---
+
+## Documentation
+
+### Project structure
 
 ```
 src/
   clients/          API client wrappers (Jamf, Snipe-IT, Azure, HiBob, Slack)
   core/             Config loader, client factory, state management
-  infra/            Audit CSV, health server, progress tracker, helpers
-  matching/         User matcher (fuzzy + AI resolver)
+  infra/            Audit CSV, health server, progress tracker
+  matching/         UserMatcher + AI resolver + user overrides
   modules/
     lifecycle/      Azure Starters, User Enrichment, Leavers
     sync/           User Match, Correction, Snipe-to-Jamf, Model Sync, Peripherals
-    maintenance/    Cleanup, Reconciliation, Username Standardize, WakeUp
+    maintenance/    Cleanup, Reconciliation, Username Standardize, WakeUp, AI Audit
   main.py           CLI entry point
   docker_scheduler.py   Docker mode with scheduler + on-demand menu
 
@@ -275,15 +319,14 @@ terraform/
 
 config/
   config.yaml.example           Template (safe to commit)
-  equipment_mapping.json        HiBob name -> Snipe-IT accessory mapping
+  equipment_mapping.json        HiBob name → Snipe-IT accessory mapping
+  user_overrides.json           Manual matching overrides
 ```
 
----
+### License
 
-## License
+MIT — see [LICENSE](LICENSE)
 
-MIT License - see [LICENSE](LICENSE)
+### Author
 
-## Author
-
-**Davide Caputo** - TechOps
+**Davide Caputo** — TechOps

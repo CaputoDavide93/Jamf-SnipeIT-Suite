@@ -1,119 +1,106 @@
-# 🔐 Security Policy
+# Security Policy
 
-## Supported Versions
+## Handling sensitive data
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 1.x.x   | :white_check_mark: |
+This application handles credentials for multiple systems:
 
-## ⚠️ Important Security Notice
+- **Jamf Pro** (API credentials / OAuth)
+- **Snipe-IT** (API token)
+- **Azure AD / Microsoft Entra ID** (client secret)
+- **Slack** (bot token)
+- **HiBob** (service user token)
+- **Anthropic** (LLM API key)
 
-This application handles sensitive credentials for multiple enterprise systems:
-- **Jamf Pro** API credentials
-- **Snipe-IT** API tokens
-- **Azure AD / Microsoft Entra ID** client secrets
+### Credential storage
 
-### 🚨 Never Commit Secrets
+**Local development:** `config/config.yaml` (gitignored, never committed)
 
-The `config/config.yaml` file contains sensitive credentials and is **gitignored by default**. 
+**Production (AWS Fargate):** AWS SSM Parameter Store SecureString, all paths under `/jamf-snipeit-suite-prod/*`. Values are:
+- Encrypted at rest with AWS KMS
+- Decrypted at container start via the ECS execution role
+- Never visible in the ECS task definition, AWS Console, or CloudTrail
 
-**NEVER:**
-- Commit `config/config.yaml` to version control
-- Share your configuration file publicly
-- Store credentials in code or environment files that are tracked
+The ECS execution role has `ssm:GetParameters` scoped **only** to this project's parameter namespace.
 
-**ALWAYS:**
-- Use `config/config.yaml.example` as a template
-- Keep credentials in the gitignored `config/config.yaml`
-- Rotate credentials if you suspect they've been exposed
-- Use environment variables in production when possible
+### Never commit
 
-## 🔒 Security Best Practices
+- `config/config.yaml`
+- `config/*.sb-*` (editor swap files)
+- `terraform/environments/*/terraform.tfvars`
+- Any file starting with a recognisable credential prefix (`xoxb-`, `sk-ant-`, `eyJ...`)
 
-### API Credentials
+The `.gitignore` covers all of these. Every commit is scanned before pushing to both GitHub and Bitbucket.
 
-1. **Jamf Pro**: Use OAuth2 client credentials instead of username/password when possible
-2. **Snipe-IT**: Create dedicated API tokens with appropriate scope
-3. **Azure AD**: Use app registrations with minimal required permissions
+## Network security
 
-### Minimal Permissions
+### AWS Fargate task
 
-Configure API credentials with the minimum required permissions:
+- **Account lock:** `allowed_account_ids = ["<AWS_ACCOUNT_ID>"]` — Terraform refuses to deploy anywhere else
+- **Region lock:** `eu-west-1` only (validation block)
+- **Security group:** egress-only, no inbound rules
+- **VPC:** runs in the default VPC with a public IP (needed for outbound to SaaS APIs)
+- **Tags:** every resource tagged `Owner: Davide Caputo - TechOps`
 
-#### Jamf Pro Permissions
-- Read Computers
-- Update Computers (Location only)
-- Read Smart Computer Groups
-- Send Remote Commands (for WakeUp module only)
+### Logging
 
-#### Snipe-IT Permissions
-- Full API access (create/read/update assets, users)
+CloudWatch logs are sanitised:
+- API response bodies truncated to 200 chars
+- Bearer tokens masked (`***` after first 8 chars)
+- No credentials or secrets ever logged at INFO or WARN
+- XML/JSON payloads shown as structural placeholders only
 
-#### Azure AD Permissions
-- `User.Read.All` (Application)
-- `Group.Read.All` (Application)
-- `GroupMember.Read.All` (Application)
+## Identity and access
 
-### Docker Security
+### IAM least privilege
 
-When running in Docker:
-- Mount `config.yaml` as read-only: `-v ./config:/app/config:ro`
-- Run as non-root user (default in Dockerfile)
-- Don't expose unnecessary ports
+| Role | Permissions |
+|------|-------------|
+| ECS Execution Role | `AmazonECSTaskExecutionRolePolicy` + scoped `ssm:GetParameters` for this project only |
+| ECS Task Role | `s3:GetObject/PutObject` on the AI cache bucket only |
+| EventBridge Role | `ecs:RunTask` on this task definition only + scoped `iam:PassRole` |
 
-## 🐛 Reporting a Vulnerability
+### Auto-created user passwords
 
-If you discover a security vulnerability, please:
+New Snipe-IT users created from Azure AD receive a cryptographically random 24-character password. Users must reset it via Snipe-IT's password reset flow — the plaintext is never logged or stored.
 
-1. **DO NOT** open a public GitHub issue
-2. Email the maintainer directly at: **CaputoDav@gmail.com**
-3. Include:
-   - Description of the vulnerability
-   - Steps to reproduce
-   - Potential impact
-   - Suggested fix (if any)
+## Change management
 
-### Response Timeline
+### Secret rotation
 
-- **Acknowledgment**: Within 48 hours
-- **Initial Assessment**: Within 1 week
-- **Fix Timeline**: Depends on severity
-  - Critical: 24-48 hours
-  - High: 1 week
-  - Medium: 2-4 weeks
-  - Low: Next release
+```bash
+# Rotate any credential via SSM — next Fargate run picks it up automatically
+aws ssm put-parameter \
+  --name /jamf-snipeit-suite-prod/<name> \
+  --value "<new-value>" \
+  --type SecureString \
+  --overwrite
+```
 
-## 🔍 Security Checklist for Contributors
+### Removing a credential
 
-Before submitting a PR, ensure:
+1. Delete the SSM parameter (`aws ssm delete-parameter --name ...`)
+2. Remove the env var reference from `terraform/modules/jamf-snipeit-suite/ecs.tf`
+3. Run `terraform apply` to register the updated task definition
 
-- [ ] No credentials, tokens, or secrets in code
-- [ ] No hardcoded URLs pointing to real instances
-- [ ] No company-specific or personally identifiable information
-- [ ] Example configurations use placeholder values
-- [ ] Sensitive operations are logged without exposing credentials
+## Reporting a vulnerability
 
-## 📋 Credential Rotation
+Email the maintainer at **CaputoDav@gmail.com**. Do not open a public GitHub issue.
 
-If you suspect credentials have been compromised:
+Expected response:
+- Acknowledgement: within 48 hours
+- Initial assessment: within 1 week
+- Fix timeline depends on severity
 
-### Jamf Pro
-1. Go to Settings > System > API Roles and Clients
-2. Revoke the compromised client
-3. Create a new API client
-4. Update `config.yaml`
+## Security checklist (for contributors)
 
-### Snipe-IT
-1. Go to Admin > User Management > Your User > API Keys
-2. Delete the compromised token
-3. Create a new API key
-4. Update `config.yaml`
+Before opening a PR, verify:
 
-### Azure AD
-1. Go to Azure Portal > App Registrations > Your App > Certificates & Secrets
-2. Delete the compromised secret
-3. Create a new client secret
-4. Update `config.yaml`
+- [ ] No credentials in code or commit messages
+- [ ] No real URLs pointing to internal instances
+- [ ] No employee names, emails, or IDs in code (only in gitignored config)
+- [ ] Example files use placeholder values
+- [ ] New logging statements don't leak API responses or tokens
+- [ ] Dependencies pinned (no `latest` floating references)
 
 ---
 
