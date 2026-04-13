@@ -75,7 +75,7 @@ class UserMatchModule:
             logger.debug("Loading Snipe-IT users for matching...")
             users = self.snipe.get_all_users()
 
-            # Load Azure AD users for cross-platform matching
+            # Load ALL active Azure AD users for cross-platform matching
             logger.debug("Loading Azure AD users for cross-platform matching...")
             azure_users = []
             try:
@@ -87,12 +87,23 @@ class UserMatchModule:
                     scope=self.config.azure.scope,
                     timeout=self.config.api.timeout_seconds,
                 )
-                if self.config.azure.starters_group_id:
-                    azure_users = azure.get_group_members(self.config.azure.starters_group_id)
+                azure_users = azure.get_all_active_users()
                 azure.close()
-                logger.debug(f"Loaded {len(azure_users)} Azure AD users")
+                # Store on self for auto-create fallback
+                self._azure_users_by_upn = {
+                    (u.get("userPrincipalName") or "").lower(): u for u in azure_users
+                }
+                self._azure_users_by_prefix = {}
+                for u in azure_users:
+                    upn = (u.get("userPrincipalName") or "").lower()
+                    prefix = upn.split("@")[0].replace(".", "").replace("-", "").replace("_", "")
+                    if prefix:
+                        self._azure_users_by_prefix[prefix] = u
+                logger.info(f"Loaded {len(azure_users)} active Azure AD users")
             except Exception as e:
                 logger.warning(f"Could not load Azure AD users: {e}")
+                self._azure_users_by_upn = {}
+                self._azure_users_by_prefix = {}
 
             # Initialize AI resolver
             ai_api_key = getattr(self.config, 'ai_api_key', '') or os.environ.get('AI_API_KEY', '')
@@ -118,6 +129,74 @@ class UserMatchModule:
         if model_identifier and model_identifier in self.model_map:
             return int(self.model_map[model_identifier])
         return self.config.snipeit.model_fallback_id
+
+    def _try_create_from_azure(
+        self,
+        jamf_username: str,
+        jamf_fullname: str,
+        serial: str,
+        hostname: str,
+    ) -> Optional[Dict[str, Any]]:
+        """If the Jamf local user exists in Azure AD as active but not in Snipe-IT,
+        auto-create them in Snipe-IT. Returns the new Snipe-IT user dict or None."""
+        if not getattr(self, "_azure_users_by_prefix", None):
+            return None
+
+        # Try to find matching Azure user by normalized username
+        uname_norm = jamf_username.lower().replace(".", "").replace("-", "").replace("_", "")
+        azure_user = self._azure_users_by_prefix.get(uname_norm)
+
+        # Fallback: match by display name
+        if not azure_user and jamf_fullname:
+            target = jamf_fullname.lower().strip()
+            for u in self._azure_users_by_upn.values():
+                if (u.get("displayName") or "").lower().strip() == target:
+                    azure_user = u
+                    break
+
+        if not azure_user:
+            return None
+
+        # Must be active
+        if not azure_user.get("accountEnabled", True):
+            return None
+
+        email = (azure_user.get("mail") or azure_user.get("userPrincipalName") or "").strip()
+        if not email:
+            return None
+
+        # Check if they actually exist in Snipe-IT by email (race safety)
+        existing = self.snipe.find_user_by_email(email)
+        if existing:
+            return existing
+
+        # Create them
+        import secrets, string
+        alphabet = string.ascii_letters + string.digits + "!@#$%"
+        pw = ''.join(secrets.choice(alphabet) for _ in range(24))
+
+        first = azure_user.get("givenName") or (jamf_fullname.split()[0] if jamf_fullname else email.split("@")[0])
+        last = azure_user.get("surname") or (jamf_fullname.split()[-1] if " " in jamf_fullname else first)
+        display_name = azure_user.get("displayName") or f"{first} {last}"
+
+        user_data = {
+            "first_name": first,
+            "last_name": last,
+            "email": email,
+            "username": email,
+            "password": pw,
+            "password_confirmation": pw,
+            "jobtitle": azure_user.get("jobTitle") or "",
+        }
+        new_user = self.snipe.create_user(user_data)
+        if not new_user:
+            return None
+
+        logger.info(
+            f"Auto-created Snipe-IT user: {display_name} ({email}) "
+            f"for Jamf local account '{jamf_username}' on {serial} ({hostname})"
+        )
+        return new_user
     
     def run(
         self,
@@ -356,15 +435,30 @@ class UserMatchModule:
         if snipe_user_id:
             logger.debug(f"Matched Snipe user: id={snipe_user_id}, email={snipe_email}")
         elif not debug_info.get("rejected_reason"):
-            # Not ambiguous, just no match found at all
-            logger.debug("No confident Snipe user match")
-            results["unmatched_devices"].append({
-                "description": (
-                    f"`{serial}` *{hostname}*\n"
-                    f"      Local user: `{primary_username}` ({full_name_hint or 'no name'})\n"
-                    f"      No matching Snipe-IT user found"
+            # Not found in Snipe-IT — check if the Jamf local user exists in Azure AD.
+            # If they do (active), auto-create them in Snipe-IT.
+            created = self._try_create_from_azure(primary_username, full_name_hint, serial, hostname)
+            if created:
+                snipe_user_id = created.get("id")
+                snipe_email = created.get("email")
+                snipe_name = created.get("name")
+                snipe_username = created.get("username")
+                # Refresh user matcher cache so subsequent devices see the new user
+                if self._user_matcher:
+                    self._user_matcher.users.append(created)
+                logger.info(
+                    f"Auto-created Snipe-IT user from Azure AD: {snipe_name} "
+                    f"(id={snipe_user_id}) for local account '{primary_username}'"
                 )
-            })
+            else:
+                logger.debug("No confident Snipe user match")
+                results["unmatched_devices"].append({
+                    "description": (
+                        f"`{serial}` *{hostname}*\n"
+                        f"      Local user: `{primary_username}` ({full_name_hint or 'no name'})\n"
+                        f"      No matching Snipe-IT user found (not in Azure AD either)"
+                    )
+                })
         
         # Find or create asset
         asset = self.snipe.get_asset_by_serial(serial)

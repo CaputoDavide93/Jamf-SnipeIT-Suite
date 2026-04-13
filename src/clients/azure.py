@@ -253,6 +253,38 @@ class AzureClient:
         logger.debug(f"Retrieved {len(users)} disabled users")
         return users
     
+    def get_all_active_users(self) -> List[Dict[str, Any]]:
+        """
+        Fetch ALL active users from Azure AD (not just a specific group).
+        Returns displayName, mail, userPrincipalName, jobTitle, department.
+        """
+        logger.debug("Fetching all active Azure AD users...")
+
+        base_url = "https://graph.microsoft.com/v1.0/users"
+        params = {
+            "$filter": "accountEnabled eq true",
+            "$select": "id,displayName,mail,userPrincipalName,jobTitle,department,accountEnabled,givenName,surname",
+            "$top": "999",
+        }
+
+        users: List[Dict[str, Any]] = []
+        url = base_url
+        while url:
+            response = self._request_with_retry("GET", url, params=params if url == base_url else None)
+            if response.status_code != 200:
+                try:
+                    error = response.json()
+                except ValueError:
+                    error = response.text
+                raise RuntimeError(f"Graph API request failed: {error}")
+            data = response.json()
+            users.extend(data.get("value", []))
+            url = data.get("@odata.nextLink")
+            params = None
+
+        logger.debug(f"Retrieved {len(users)} active Azure AD users")
+        return users
+
     def get_group_members(self, group_id: str) -> List[Dict[str, Any]]:
         """
         Fetch members of an Azure AD group.
