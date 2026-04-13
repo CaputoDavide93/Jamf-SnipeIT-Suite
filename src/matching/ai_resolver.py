@@ -6,11 +6,16 @@ When the fuzzy matcher can't confidently pick between two or more candidates
 it to reason about which Snipe-IT user is the correct match for a Jamf
 local account.
 
+Includes a persistent cache so repeat queries (same user/candidates) don't
+re-call the AI — critical for staying under API rate limits.
+
 Requires: AI_API_KEY environment variable or config setting.
 """
+import hashlib
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -24,22 +29,112 @@ except ImportError:
 
 # Model to use for resolution — fast and cheap
 _MODEL_ID = os.environ.get("AI_MODEL_ID", "claude-haiku-4-5-20251001")
+# Cache file (resolutions persist across runs)
+_CACHE_PATH = Path(os.environ.get("AI_CACHE_PATH", "/app/output/ai_cache.json"))
+# S3 cache bucket/key — when set, cache syncs to S3 (survives Fargate restarts)
+_CACHE_S3_BUCKET = os.environ.get("AI_CACHE_S3_BUCKET", "")
+_CACHE_S3_KEY = os.environ.get("AI_CACHE_S3_KEY", "ai-resolver-cache.json")
+# Cache TTL: re-ask AI every 30 days
+_CACHE_TTL_DAYS = 30
 
 
 class AIResolver:
-    """Resolve ambiguous user matches using an LLM."""
+    """Resolve ambiguous user matches using an LLM — with persistent cache."""
 
     def __init__(self, api_key: str = "", enabled: bool = True):
         self.api_key = api_key or os.environ.get("AI_API_KEY", "")
         self.enabled = enabled and _LLM_AVAILABLE and bool(self.api_key)
         self._client = None
+        self._rate_limited = False  # Set True when API returns rate-limit error
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._load_cache()
 
         if self.enabled:
-            logger.info("AI resolver: enabled")
+            logger.info(f"AI resolver: enabled (cache: {len(self._cache)} entries)")
         elif enabled and not _LLM_AVAILABLE:
             logger.debug("AI resolver: LLM package not installed")
         elif enabled and not self.api_key:
             logger.debug("AI resolver: no API key configured")
+
+    # ------------------------------------------------------------------
+    # Cache
+    # ------------------------------------------------------------------
+
+    def _load_cache(self) -> None:
+        """Load cache from disk (and S3 if configured)."""
+        # Try S3 first (survives Fargate restarts)
+        if _CACHE_S3_BUCKET:
+            try:
+                import boto3
+                s3 = boto3.client("s3")
+                _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                s3.download_file(_CACHE_S3_BUCKET, _CACHE_S3_KEY, str(_CACHE_PATH))
+                logger.debug(f"AI cache: downloaded from s3://{_CACHE_S3_BUCKET}/{_CACHE_S3_KEY}")
+            except Exception as e:
+                logger.debug(f"AI cache: no S3 cache yet or download failed: {e}")
+
+        try:
+            if _CACHE_PATH.exists():
+                with open(_CACHE_PATH, "r") as f:
+                    self._cache = json.load(f)
+        except Exception as e:
+            logger.debug(f"AI cache load failed: {e}")
+            self._cache = {}
+
+    def _save_cache(self) -> None:
+        """Persist cache to disk (and S3 if configured)."""
+        try:
+            _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(_CACHE_PATH, "w") as f:
+                json.dump(self._cache, f)
+        except Exception as e:
+            logger.debug(f"AI cache save failed: {e}")
+            return
+
+        # Sync to S3 (only saves when cache changes, so not every call is an upload)
+        if _CACHE_S3_BUCKET:
+            try:
+                import boto3
+                s3 = boto3.client("s3")
+                s3.upload_file(str(_CACHE_PATH), _CACHE_S3_BUCKET, _CACHE_S3_KEY)
+            except Exception as e:
+                logger.debug(f"AI cache: S3 upload failed: {e}")
+
+    def _cache_key(self, username: str, fullname: str, candidate_ids: List[int]) -> str:
+        """Build a stable cache key from inputs."""
+        payload = f"{username.lower()}|{fullname.lower()}|{sorted(candidate_ids)}"
+        return hashlib.md5(payload.encode()).hexdigest()
+
+    def _get_cached(self, key: str) -> Optional[Dict[str, Any]]:
+        """Return cached entry if fresh, else None."""
+        import time
+        entry = self._cache.get(key)
+        if not entry:
+            return None
+        ts = entry.get("_ts", 0)
+        if time.time() - ts > _CACHE_TTL_DAYS * 86400:
+            return None  # expired
+        return entry
+
+    def _set_cached(self, key: str, result: Optional[Dict[str, Any]]) -> None:
+        """Store result in cache (including None for rejected matches)."""
+        import time
+        self._cache[key] = {
+            "_ts": time.time(),
+            "result_id": result.get("id") if result else None,
+            "keep_current": result.get("_keep_current") if result else None,
+        }
+        self._save_cache()
+
+    def _is_rate_limit_error(self, err: Exception) -> bool:
+        """Detect Anthropic API rate limit errors."""
+        msg = str(err).lower()
+        return (
+            "usage limit" in msg
+            or "rate limit" in msg
+            or "429" in msg
+            or "too many requests" in msg
+        )
 
     def _get_client(self):
         if self._client is None and self.enabled:
@@ -66,7 +161,22 @@ class AIResolver:
         Returns:
             The chosen candidate dict, or None if AI can't decide.
         """
-        if not self.enabled or not candidates:
+        if not self.enabled or not candidates or self._rate_limited:
+            return None
+
+        # Check cache first — avoids re-calling for same user/candidates
+        cand_ids = [int(c.get("id", 0)) for c in candidates[:5]]
+        cache_key = self._cache_key(local_username, local_fullname, cand_ids)
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            cached_id = cached.get("result_id")
+            if cached_id is None:
+                logger.debug(f"AI cache hit (no match): '{local_username}'")
+                return None
+            for c in candidates:
+                if c.get("id") == cached_id:
+                    logger.debug(f"AI cache hit: '{local_username}' -> {c.get('name')}")
+                    return c
             return None
 
         # Build the prompt with all available context
@@ -138,24 +248,34 @@ If you truly cannot determine the correct match, respond:
             )
 
             if match_idx is None or confidence == "none":
+                self._set_cached(cache_key, None)
                 return None
 
             # Only accept high/medium confidence
             if confidence not in ("high", "medium"):
                 logger.info(f"AI resolver: low confidence, skipping")
+                self._set_cached(cache_key, None)
                 return None
 
             # Return the chosen candidate (1-indexed)
             idx = int(match_idx) - 1
             if 0 <= idx < len(candidates):
-                return candidates[idx]
+                picked = candidates[idx]
+                self._set_cached(cache_key, picked)
+                return picked
 
+            self._set_cached(cache_key, None)
             return None
 
         except json.JSONDecodeError as e:
             logger.warning(f"AI resolver: could not parse response: {e}")
             return None
         except Exception as e:
+            if self._is_rate_limit_error(e):
+                if not self._rate_limited:
+                    logger.warning(f"AI resolver rate-limited, disabling for rest of run: {e}")
+                    self._rate_limited = True
+                return None
             logger.warning(f"AI resolver error: {e}")
             return None
 
@@ -187,7 +307,25 @@ If you truly cannot determine the correct match, respond:
         Returns:
             The chosen Snipe-IT candidate dict, or None.
         """
-        if not self.enabled:
+        if not self.enabled or self._rate_limited:
+            return None
+
+        # Check cache
+        cand_ids = [int(c.get("id", 0)) for c in candidates[:8]]
+        cache_key = self._cache_key(local_username, local_fullname, cand_ids)
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            if cached.get("keep_current"):
+                logger.debug(f"AI cache hit (keep_current): '{local_username}'")
+                return {"_keep_current": True}
+            cached_id = cached.get("result_id")
+            if cached_id is None:
+                logger.debug(f"AI cache hit (no match): '{local_username}'")
+                return None
+            for c in candidates:
+                if c.get("id") == cached_id:
+                    logger.debug(f"AI cache hit: '{local_username}' -> {c.get('name')}")
+                    return c
             return None
 
         # Build candidate info
@@ -301,23 +439,35 @@ Set "match" to null and "confidence" to "none" if no confident match can be made
 
             if keep_current and current_assignment:
                 # AI says keep current assignment — return a special marker
-                return {"_keep_current": True, "id": current_assignment.get("id")}
+                result_marker = {"_keep_current": True, "id": current_assignment.get("id")}
+                self._set_cached(cache_key, result_marker)
+                return result_marker
 
             if match_idx is None or confidence == "none":
+                self._set_cached(cache_key, None)
                 return None
 
             if confidence not in ("high", "medium"):
+                self._set_cached(cache_key, None)
                 return None
 
             idx = int(match_idx) - 1
             if 0 <= idx < len(candidates):
-                return candidates[idx]
+                picked = candidates[idx]
+                self._set_cached(cache_key, picked)
+                return picked
 
+            self._set_cached(cache_key, None)
             return None
 
         except json.JSONDecodeError as e:
             logger.warning(f"AI cross-platform: could not parse response: {e}")
             return None
         except Exception as e:
+            if self._is_rate_limit_error(e):
+                if not self._rate_limited:
+                    logger.warning(f"AI rate-limited — disabling AI for rest of run: {e}")
+                    self._rate_limited = True
+                return None
             logger.warning(f"AI cross-platform error: {e}")
             return None

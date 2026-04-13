@@ -289,7 +289,18 @@ class Config:
                 "base_url": _env("HIBOB_BASE_URL", "https://api.hibob.com/v1"),
             },
             "scheduler": {"enabled": False, "run_on_startup": True},
-            "modules": {},
+            "modules": {
+                "model_sync": {
+                    "enabled": True,
+                    "default_category_id": int(_env("MODEL_SYNC_CATEGORY_ID", "2")),
+                    "auto_create_models": True,
+                    "auto_create_manufacturers": True,
+                },
+                "peripherals_sync": {
+                    "accessory_category_id": int(_env("PERIPHERALS_CATEGORY_ID", "4")),
+                    "equipment_mapping_file": "config/equipment_mapping.json",
+                },
+            },
         }
 
     @staticmethod

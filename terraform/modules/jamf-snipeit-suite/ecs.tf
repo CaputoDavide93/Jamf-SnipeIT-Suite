@@ -59,6 +59,9 @@ resource "aws_ecs_task_definition" "app" {
       { name = "AZURE_STARTERS_GROUP_ID", value = var.azure_starters_group_id },
       { name = "MATCHING_EMAIL_DOMAIN", value = var.matching_email_domain },
       { name = "MATCHING_SKIP_USERNAMES", value = var.matching_skip_usernames },
+      { name = "AI_CACHE_S3_BUCKET", value = aws_s3_bucket.ai_cache.id },
+      { name = "AI_CACHE_S3_KEY", value = "ai-resolver-cache.json" },
+      { name = "MODEL_SYNC_CATEGORY_ID", value = "2" },
     ]
 
     # ALL credentials injected from SSM SecureString at runtime
