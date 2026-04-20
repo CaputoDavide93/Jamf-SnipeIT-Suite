@@ -41,13 +41,34 @@ _CACHE_TTL_DAYS = 30
 class AIResolver:
     """Resolve ambiguous user matches using an LLM — with persistent cache."""
 
-    def __init__(self, api_key: str = "", enabled: bool = True):
+    def __init__(self, api_key: str = "", enabled: bool = True, slack=None):
         self.api_key = api_key or os.environ.get("AI_API_KEY", "")
         self.enabled = enabled and _LLM_AVAILABLE and bool(self.api_key)
         self._client = None
         self._rate_limited = False  # Set True when API returns rate-limit error
+        self._slack = slack  # SlackClient for rate-limit alerts
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._load_cache()
+
+    def _notify_rate_limit(self, error: Exception) -> None:
+        """Post Slack alert when AI hits rate limit (once per run)."""
+        if not self._slack:
+            return
+        try:
+            channel = getattr(self._slack, "channel_id", None)
+            if not channel:
+                return
+            msg = str(error)[:400]
+            blocks = [
+                {"type": "header", "text": {"type": "plain_text", "text": ":warning:  AI Resolver rate-limited"}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": (
+                    f"AI matching disabled for rest of run. Fuzzy-only fallback active.\n\n"
+                    f"*Error:* ```{msg}```"
+                )}},
+            ]
+            self._slack.post_to_channel(channel, "AI resolver rate-limited", blocks)
+        except Exception as e:
+            logger.debug(f"Rate-limit alert post failed: {e}")
 
         if self.enabled:
             logger.info(f"AI resolver: enabled (cache: {len(self._cache)} entries)")
@@ -275,6 +296,7 @@ If you truly cannot determine the correct match, respond:
                 if not self._rate_limited:
                     logger.warning(f"AI resolver rate-limited, disabling for rest of run: {e}")
                     self._rate_limited = True
+                    self._notify_rate_limit(e)
                 return None
             logger.warning(f"AI resolver error: {e}")
             return None
@@ -468,6 +490,7 @@ Set "match" to null and "confidence" to "none" if no confident match can be made
                 if not self._rate_limited:
                     logger.warning(f"AI rate-limited — disabling AI for rest of run: {e}")
                     self._rate_limited = True
+                    self._notify_rate_limit(e)
                 return None
             logger.warning(f"AI cross-platform error: {e}")
             return None

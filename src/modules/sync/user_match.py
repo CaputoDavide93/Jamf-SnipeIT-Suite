@@ -107,7 +107,7 @@ class UserMatchModule:
 
             # Initialize AI resolver
             ai_api_key = getattr(self.config, 'ai_api_key', '') or os.environ.get('AI_API_KEY', '')
-            ai_resolver = AIResolver(api_key=ai_api_key) if ai_api_key else None
+            ai_resolver = AIResolver(api_key=ai_api_key, slack=self.slack) if ai_api_key else None
 
             self._user_matcher = UserMatcher(
                 users=users,
