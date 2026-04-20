@@ -518,6 +518,7 @@ class UserMatchModule:
                     serial=serial,
                     model_id=model_id,
                     status_id=self.config.snipeit.status_deployed_id,
+                    asset_tag=self.snipe.next_cf_tag(),
                     company_id=self.config.snipeit.company_id,
                     location_id=self.config.snipeit.location_id,
                 )

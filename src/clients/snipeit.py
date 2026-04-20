@@ -482,6 +482,18 @@ class SnipeITClient:
         
         return response.json().get("rows", [])
     
+    def next_cf_tag(self) -> str:
+        """Return next CF-#### asset tag by scanning existing max."""
+        import re
+        max_n = 0
+        for a in self.get_all_assets() or []:
+            m = re.match(r"^CF-(\d+)$", (a.get("asset_tag") or "").strip())
+            if m:
+                n = int(m.group(1))
+                if n > max_n:
+                    max_n = n
+        return f"CF-{max_n + 1:04d}"
+
     def create_asset(
         self,
         name: str,
@@ -514,8 +526,8 @@ class SnipeITClient:
             "status_id": status_id,
         }
         
-        # Only set asset_tag if explicitly provided.
-        # Otherwise let Snipe-IT auto-generate (e.g. CF-XXXXX).
+        # Set asset_tag if provided; caller should pass next_cf_tag() for CF-#### format.
+        # Otherwise Snipe-IT defaults asset_tag to the serial number.
         if asset_tag:
             payload["asset_tag"] = asset_tag
         
