@@ -15,6 +15,7 @@ The system runs automatically at 06:00 UTC. You should only need to check:
 |-------|------------|
 | `Correction — Assignment Mismatches` | A mismatch was found AND auto-correction failed. Investigate the specific asset in Snipe-IT. |
 | `User Match — Unmatched Devices` | A machine has a local account we can't match to anyone. Usually means a new hire not yet in Azure AD, or an ex-employee whose data is gone. |
+| `No local user account (only admin/system accounts)` | Shared / test-lab Mac with no real person account on it. Assign the real owner manually in Snipe-IT — the system will not revert it (it never reassigns without a local-account match). |
 | `Duplicate Users in Snipe-IT` | Two Snipe-IT users share the same display name. Merge them manually. |
 | `AI Cross-Platform Audit` | Weekly audit findings. Review severity and take action on critical/high items. |
 | `Module Failure` | A module crashed. Check CloudWatch logs for stack trace. |

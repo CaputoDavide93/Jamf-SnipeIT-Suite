@@ -144,10 +144,16 @@ When fuzzy rejects, the LLM reasons about the local account + all candidates + A
 If nothing matches in Snipe-IT but the Jamf local user exists in Azure AD as active, the system creates the Snipe-IT user automatically with their Azure data and assigns the machine.
 
 ### Safety rules
-- **Never reassign from active user to disabled user** even if local account name suggests it
+- **Jamf local account is source of truth** — if a local account matches a Snipe-IT user (disabled or not), the machine gets reassigned to that user. A machine whose local account belongs to `[Disabled] X` is still X's machine (notice period, returning, etc.)
 - **Only auto-correct on exact matches** — fuzzy/AI mismatches go to Slack for human review instead
 - **Pending assets untouched** by User Match or Correction
 - **Checkout failure rollback** — reverts to original user if new checkout fails
+- **Sandbox / test / demo accounts deprioritised** — local accounts whose username or realname contains `sandbox`, `demo`, `service`, `test`, `temp`, or `temporary` get -20 in the primary-picker score, so real users always win when both are present
+- **Common non-person accounts skipped** — `admin`, `shared`, `guest`, `createfuture`, `xdesign`, `payables`, `iossandboxaccount`, etc. via `MATCHING_SKIP_USERNAMES` env var / `matching.skip_usernames` yaml key
+
+### Asset identity
+- **Asset name** = serial number (e.g. `WWLWWKCWGC`). Auto-renamed on every full-run via Correction / User Match flow.
+- **Asset tag** = `CF-####` progressive number (e.g. `CF-0813`). On asset creation, `SnipeITClient.next_cf_tag()` scans the max existing `CF-<n>` and returns `CF-<n+1>`. The mutex in `run_all_modules_startup` prevents two processes racing on the next number.
 
 ---
 
