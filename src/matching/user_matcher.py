@@ -226,6 +226,16 @@ class UserMatcher:
         """
         debug_info: Dict[str, Any] = {"exact_hit_reason": None, "top_candidates": []}
 
+        # Defensive: strip email domain if caller passed an email as username
+        # (e.g. "louisa.murray@createfuture.com" -> "louisa.murray")
+        if username and "@" in username:
+            # If no original_email was set, use the full email for lookup
+            if not original_email:
+                original_email = username.lower().strip()
+            username = username.split("@", 1)[0]
+        if full_name_hint and "@" in full_name_hint:
+            full_name_hint = full_name_hint.split("@", 1)[0].replace(".", " ").title()
+
         # PRIORITY 0: manual overrides (config/user_overrides.json)
         # For users we already know about (surname changes, custom names, etc.)
         if username:
@@ -497,6 +507,11 @@ def pick_primary_local_identity(
     for user in local_users:
         username = (user.get("name") or user.get("username") or "").strip()
         full_name = (user.get("realname") or user.get("real_name") or "").strip()
+
+        # Strip email domain if someone used email as local account name
+        # (e.g. "Louisa.murray@createfuture.com" -> "Louisa.murray")
+        if "@" in username:
+            username = username.split("@", 1)[0]
 
         if not username:
             continue

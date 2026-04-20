@@ -130,3 +130,29 @@ def test_pick_primary_ignores_config_skip():
 def test_pick_primary_empty():
     assert pick_primary_local_identity([]) == (None, None, None)
     assert pick_primary_local_identity([{"name": "admin"}]) == (None, None, None)
+
+
+def test_pick_primary_strips_email_domain():
+    """Local account 'louisa.murray@createfuture.com' -> username 'louisa.murray'."""
+    local = [{"name": "louisa.murray@createfuture.com", "realname": "Louisa Murray"}]
+    uname, fullname, _ = pick_primary_local_identity(local)
+    assert uname == "louisa.murray"
+    assert fullname == "Louisa Murray"
+
+
+def test_best_match_strips_email_username():
+    """best_match called with 'louisa.murray@createfuture.com' should strip
+    domain before matching (prevents fuzzy from matching 'CreateFuture' org)."""
+    USERS = [
+        {"id": 1, "name": "Louisa Murray", "email": "louisa.murray@company.com", "username": "louisa.murray"},
+        {"id": 2, "name": "CreateFuture Receivables", "email": "receivables@company.com", "username": "receivables"},
+    ]
+    m = UserMatcher(users=USERS, email_domain="company.com")
+    match, debug = m.best_match(
+        full_name_hint="Louisa.murray@createfuture.com",
+        username="louisa.murray@createfuture.com",
+    )
+    assert match is not None
+    assert match["id"] == 1
+    # Should hit email/email-prefix, not fuzzy
+    assert not debug.get("rejected_reason")
