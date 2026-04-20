@@ -91,14 +91,21 @@ class CorrectionModule:
                 results["unassigned_skipped"] += 1
                 continue
 
-            # Skip pending/leaver assets — those are intentionally unassigned by Leavers
+            # Pending assets: normally skip (set by Leavers, manual workflow).
+            # EXCEPTION: if current assignee is [Disabled], the machine was probably
+            # reassigned to someone else — let validation run so we can fix it.
             status_label = asset.get("status_label")
             status_id = None
             if isinstance(status_label, dict):
                 status_id = status_label.get("id")
             if status_id and status_id == pending_id:
-                results["pending_skipped"] += 1
-                continue
+                assigned_to = asset.get("assigned_to") or {}
+                cur_name = assigned_to.get("name", "") if isinstance(assigned_to, dict) else ""
+                if not cur_name.startswith("[Disabled]"):
+                    # Pending + active assignee — genuine manual hold, skip
+                    results["pending_skipped"] += 1
+                    continue
+                # else: Pending + disabled → validate, may need reassignment
 
             checked_out_assets.append((asset, assigned_user_id))
 
@@ -437,6 +444,13 @@ class CorrectionModule:
         )
         if checkout_ok:
             results["corrections_made"] += 1
+            # If asset was Pending + disabled previous owner, clear to Checked Out
+            # since new active user now has it
+            asset_status = asset.get("status_label") or {}
+            if isinstance(asset_status, dict) and asset_status.get("id") == self.config.snipeit.status_pending_id:
+                if current_user_name.startswith("[Disabled]"):
+                    self.snipe.update_asset_status(asset_id, self.config.snipeit.status_deployed_id)
+                    logger.info(f"Cleared Pending status on asset {asset_id} (now active user)")
             logger.info(
                 f"CORRECTED: Asset {asset_id} ({serial}) reassigned "
                 f"from user {current_uid} ({current_user_name}) "
