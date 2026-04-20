@@ -175,7 +175,7 @@ variable "matching_email_domain" {
 }
 variable "matching_skip_usernames" {
   type    = string
-  default = "admin,shared,guest"
+  default = "admin,administrator,shared,guest,dan,createfuture,xdesign,payables,iossandboxaccount,iossandbox,sandbox,testuser,test"
 }
 
 variable "slack_bot_token" {
