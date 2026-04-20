@@ -299,7 +299,7 @@ class AzureClient:
         
         base_url = f"https://graph.microsoft.com/v1.0/groups/{group_id}/members"
         params = {
-            "$select": "id,displayName,mail,userPrincipalName,accountEnabled,givenName,surname,jobTitle,department,companyName",
+            "$select": "id,displayName,mail,userPrincipalName,accountEnabled,givenName,surname,jobTitle,department,companyName,employeeLeaveDateTime",
         }
         
         members: List[Dict[str, Any]] = []

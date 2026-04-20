@@ -182,16 +182,82 @@ def cmd_azure_starters(args, config: Config):
 
 def cmd_correction(args, config: Config):
     """Run Self-Healing Correction module - detect and fix wrong assignments."""
-    print("\n🔧 Running Self-Healing Correction Module...")
+    print("\nRunning Self-Healing Correction Module...")
     print("   Validating existing Snipe-IT assignments against Jamf data.\n")
-    
+
     module = CorrectionModule(config)
     results = module.run(dry_run=args.dry_run)
-    
+
     errors = results.get('errors', 0)
     error_count = len(errors) if isinstance(errors, list) else errors
-    
+
     return (0 if error_count == 0 else 1, results)
+
+
+def cmd_health_check(args, config: Config):
+    """Scan for stuck/inconsistent states."""
+    from modules.maintenance.health_check import HealthCheckModule
+    module = HealthCheckModule(config)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
+    return (0, results)
+
+
+def cmd_ai_audit(args, config: Config):
+    """AI cross-platform audit."""
+    from modules.maintenance.ai_audit import AIAuditModule
+    module = AIAuditModule(config)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
+    return (0, results)
+
+
+def cmd_cleanup(args, config: Config):
+    """Merge duplicate users, remove junk."""
+    from modules.maintenance import CleanupModule
+    module = CleanupModule(config)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
+    return (0, results)
+
+
+def cmd_user_enrichment(args, config: Config):
+    """Push Azure fields to Snipe-IT."""
+    from modules.lifecycle import UserEnrichmentModule
+    module = UserEnrichmentModule(config)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
+    return (0, results)
+
+
+def cmd_peripherals_sync(args, config: Config):
+    """Sync HiBob equipment."""
+    from modules.sync import PeripheralsSyncModule
+    module = PeripheralsSyncModule(config, dry_run=args.dry_run)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
+    return (0, results)
+
+
+def cmd_username_standardize(args, config: Config):
+    """Strip @domain from usernames."""
+    from modules.maintenance import UsernameStandardizer
+    module = UsernameStandardizer(config)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
+    return (0, results)
 
 
 def cmd_run_all(args, config: Config):
@@ -559,7 +625,39 @@ Examples:
         help='Detect and fix wrong asset assignments from previous runs')
     correction_parser.add_argument('--dry-run', '-n', action='store_true',
         help='Report mismatches without making changes')
-    
+
+    # Health check (scans stuck/inconsistent states)
+    health_check_parser = subparsers.add_parser('health-check',
+        help='Scan for stuck/inconsistent states and report to Slack')
+    health_check_parser.add_argument('--dry-run', '-n', action='store_true',
+        help='Report issues without sending Slack')
+
+    # AI Audit (cross-platform LLM analysis)
+    ai_audit_parser = subparsers.add_parser('ai-audit',
+        help='AI-powered cross-platform audit (security, compliance, anomalies)')
+    ai_audit_parser.add_argument('--dry-run', '-n', action='store_true',
+        help='Run without posting to Slack')
+
+    # Cleanup (merge duplicates, remove junk)
+    cleanup_parser = subparsers.add_parser('cleanup',
+        help='Merge duplicate users and remove junk accounts')
+    cleanup_parser.add_argument('--dry-run', '-n', action='store_true')
+
+    # User Enrichment (push Azure fields to Snipe-IT)
+    enrich_parser = subparsers.add_parser('user-enrichment',
+        help='Push Azure AD fields (job title, dept) to Snipe-IT')
+    enrich_parser.add_argument('--dry-run', '-n', action='store_true')
+
+    # Peripherals Sync (HiBob -> Snipe-IT accessories)
+    peripherals_parser = subparsers.add_parser('peripherals-sync',
+        help='Sync HiBob equipment to Snipe-IT accessories')
+    peripherals_parser.add_argument('--dry-run', '-n', action='store_true')
+
+    # Username Standardize (strip @domain from usernames)
+    uname_std_parser = subparsers.add_parser('username-standardize',
+        help='Strip @domain from Snipe-IT usernames')
+    uname_std_parser.add_argument('--dry-run', '-n', action='store_true')
+
     # Health server command
     health_parser = subparsers.add_parser('health-server',
         help='Start health check HTTP server')
@@ -611,6 +709,12 @@ Examples:
         'reconcile': cmd_reconcile,
         'azure-starters': cmd_azure_starters,
         'correction': cmd_correction,
+        'health-check': cmd_health_check,
+        'ai-audit': cmd_ai_audit,
+        'cleanup': cmd_cleanup,
+        'user-enrichment': cmd_user_enrichment,
+        'peripherals-sync': cmd_peripherals_sync,
+        'username-standardize': cmd_username_standardize,
     }
     
     # Special handling for health server (long-running)

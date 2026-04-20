@@ -56,6 +56,7 @@ from modules.maintenance import (
     UsernameStandardizer,
 )
 from modules.maintenance.ai_audit import AIAuditModule
+from modules.maintenance.health_check import HealthCheckModule
 
 
 # Global state
@@ -336,6 +337,15 @@ def run_ai_audit(dry_run: bool = False) -> Dict:
         module.close()
 
 
+def run_health_check(dry_run: bool = False) -> Dict:
+    """Run Health Check."""
+    module = HealthCheckModule(config)
+    try:
+        return module.run(dry_run=dry_run)
+    finally:
+        module.close()
+
+
 def run_all_modules_startup(dry_run: bool = False):
     """
     Run all modules on startup with RunContext for shared data and metrics.
@@ -343,6 +353,13 @@ def run_all_modules_startup(dry_run: bool = False):
     """
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(f"=== STARTUP RUN ({mode}) ===")
+
+    # Mutex: prevent concurrent full-sync runs
+    from infra.mutex import RunMutex
+    mutex = RunMutex()
+    if not mutex.acquire():
+        logger.error("Another run already in progress — aborting")
+        return {"aborted": True, "reason": "mutex_held"}
 
     # Pre-flight connectivity check
     pre_flight_check()
@@ -387,6 +404,7 @@ def run_all_modules_startup(dry_run: bool = False):
     if slack and config.slack.notify_module_summary:
         slack.notify_run_summary(summary)
 
+    mutex.release()
     return results
 
 
@@ -678,6 +696,17 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             name='AI Cross-Platform Audit'
         )
         logger.info(f"  AI Audit: {cron}")
+
+    # Add Health Check job (daily, after full sync)
+    if jobs_config.get('health_check', {}).get('enabled', False):
+        cron = jobs_config['health_check'].get('cron', '0 9 * * *')
+        scheduler.add_job(
+            lambda: run_module_safe("Health Check", run_health_check),
+            CronTrigger.from_crontab(cron),
+            id='health_check',
+            name='Health Check'
+        )
+        logger.info(f"  Health Check: {cron}")
 
     return scheduler
 

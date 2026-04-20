@@ -4,6 +4,7 @@ from .reconciliation import ReconciliationModule, ReconciliationResults, run_rec
 from .cleanup import CleanupModule, run_cleanup
 from .username_standardize import UsernameStandardizer, run_username_standardize
 from .ai_audit import AIAuditModule, run_ai_audit
+from .health_check import HealthCheckModule, run_health_check
 
 __all__ = [
     "WakeUpModule", "run_wakeup_group", "run_wakeup_serial", "run_wakeup_file",
@@ -11,4 +12,5 @@ __all__ = [
     "CleanupModule", "run_cleanup",
     "UsernameStandardizer", "run_username_standardize",
     "AIAuditModule", "run_ai_audit",
+    "HealthCheckModule", "run_health_check",
 ]

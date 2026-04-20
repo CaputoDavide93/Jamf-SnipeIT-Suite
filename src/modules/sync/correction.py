@@ -47,6 +47,45 @@ class CorrectionModule:
         self.slack = create_slack_client(config)
         # Cache for Jamf computer details (serial → dict), populated lazily
         self._jamf_cache: Dict[str, Optional[Dict]] = {}
+        # Azure leaver/disabled emails (loaded lazily on first validation)
+        self._azure_inactive_emails: Optional[set] = None
+
+    def _load_azure_inactive(self) -> set:
+        """Load set of emails for leavers+disabled Azure users."""
+        if self._azure_inactive_emails is not None:
+            return self._azure_inactive_emails
+        emails = set()
+        try:
+            from clients.azure import AzureClient
+            az = AzureClient(
+                tenant_id=self.config.azure.tenant_id,
+                client_id=self.config.azure.client_id,
+                client_secret=self.config.azure.client_secret,
+                scope=self.config.azure.scope,
+                timeout=self.config.api.timeout_seconds,
+            )
+            for gid in (self.config.azure.leavers_group_id, self.config.azure.disabled_group_id):
+                if not gid:
+                    continue
+                for u in az.get_group_members(gid):
+                    e = AzureClient.extract_email(u)
+                    if e:
+                        emails.add(e.lower())
+            az.close()
+        except Exception as e:
+            logger.warning(f"Could not load Azure inactive groups: {e}")
+        self._azure_inactive_emails = emails
+        return emails
+
+    def _is_inactive_user(self, user: Dict[str, Any]) -> bool:
+        """User is inactive if [Disabled] prefix OR in Azure leaver/disabled groups."""
+        if not isinstance(user, dict):
+            return False
+        name = user.get("name") or ""
+        if name.startswith("[Disabled]"):
+            return True
+        email = (user.get("email") or "").lower()
+        return email in self._load_azure_inactive()
 
     # ------------------------------------------------------------------
     # Public
@@ -100,12 +139,11 @@ class CorrectionModule:
                 status_id = status_label.get("id")
             if status_id and status_id == pending_id:
                 assigned_to = asset.get("assigned_to") or {}
-                cur_name = assigned_to.get("name", "") if isinstance(assigned_to, dict) else ""
-                if not cur_name.startswith("[Disabled]"):
+                if not self._is_inactive_user(assigned_to):
                     # Pending + active assignee — genuine manual hold, skip
                     results["pending_skipped"] += 1
                     continue
-                # else: Pending + disabled → validate, may need reassignment
+                # else: Pending + inactive (disabled/leaver) → validate
 
             checked_out_assets.append((asset, assigned_user_id))
 
@@ -448,7 +486,8 @@ class CorrectionModule:
             # since new active user now has it
             asset_status = asset.get("status_label") or {}
             if isinstance(asset_status, dict) and asset_status.get("id") == self.config.snipeit.status_pending_id:
-                if current_user_name.startswith("[Disabled]"):
+                prev_assignee = asset.get("assigned_to") or {}
+                if self._is_inactive_user(prev_assignee):
                     self.snipe.update_asset_status(asset_id, self.config.snipeit.status_deployed_id)
                     logger.info(f"Cleared Pending status on asset {asset_id} (now active user)")
             logger.info(

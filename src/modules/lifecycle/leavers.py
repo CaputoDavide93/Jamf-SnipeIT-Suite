@@ -189,8 +189,12 @@ class LeaversModule:
         snipe_user_id = snipe_user.get("id")
         logger.debug(f"Found Snipe-IT user: id={snipe_user_id}")
         
-        # For disabled users, add [Disabled] prefix to name
-        if group_type == "disabled" and not user.get("accountEnabled"):
+        # Add [Disabled] prefix only when user is truly inactive:
+        #   - accountEnabled == false (hard disabled), OR
+        #   - employeeLeaveDateTime in the past (actually left)
+        # Users still in notice period (in leavers group but accountEnabled=True,
+        # leave date in future) do NOT get tagged yet.
+        if self._should_tag_disabled(user):
             self._update_user_name_disabled(snipe_user, dry_run, results)
         
         # Find user's assets
@@ -277,6 +281,28 @@ class LeaversModule:
         
         return assets
     
+    @staticmethod
+    def _should_tag_disabled(azure_user: Dict[str, Any]) -> bool:
+        """Tag [Disabled] only if truly inactive:
+        - accountEnabled == false, OR
+        - employeeLeaveDateTime <= now (leave date passed)
+        """
+        if not azure_user.get("accountEnabled", True):
+            return True
+        leave = azure_user.get("employeeLeaveDateTime")
+        if leave:
+            try:
+                from datetime import datetime, timezone
+                # Azure returns ISO 8601 with Z or offset
+                leave_str = leave.replace("Z", "+00:00") if isinstance(leave, str) else str(leave)
+                leave_dt = datetime.fromisoformat(leave_str)
+                if leave_dt.tzinfo is None:
+                    leave_dt = leave_dt.replace(tzinfo=timezone.utc)
+                return leave_dt <= datetime.now(timezone.utc)
+            except (ValueError, TypeError):
+                return False
+        return False
+
     def _update_user_name_disabled(
         self,
         snipe_user: Dict[str, Any],
