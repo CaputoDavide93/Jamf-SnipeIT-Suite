@@ -377,21 +377,12 @@ class CorrectionModule:
             return
 
         # ---- Safety: never reassign FROM an active user TO a disabled user ----
-        # This catches the common case where a machine was reassigned to a new
-        # person but the old (disabled) user's local account is still on it.
-        # e.g. Kerensa Martin (active) has the machine, but old local account
-        # "chrismartin" matches [Disabled] Chris Martin — leave Kerensa alone.
-        expected_is_disabled = expected_user_name.strip().startswith("[Disabled]")
         current_is_disabled = current_user_name.strip().startswith("[Disabled]")
+        expected_is_disabled = expected_user_name.strip().startswith("[Disabled]")
 
-        if expected_is_disabled and not current_is_disabled:
-            logger.info(
-                f"Asset {asset_id} ({serial}): local account '{primary_username}' "
-                f"matches disabled user '{expected_user_name}', but currently "
-                f"assigned to active user '{current_user_name}' — keeping current assignment"
-            )
-            results["correct_assignments"] += 1
-            return
+        # Jamf local account is source of truth — always trust it.
+        # If local matches a [Disabled] user, the machine is still theirs
+        # (notice period, returning it, etc.). Reassign regardless.
 
         # ---- Safety: only auto-correct on EXACT matches ----
         # Fuzzy and AI matches can be wrong (e.g. Jane Winters -> Jane Porter
