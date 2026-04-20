@@ -171,7 +171,7 @@ class UserMatcher:
                 f"{m.get('name', '?')} (id={m.get('id')}, email={m.get('email', '?')})"
                 for m in matches
             ]
-            logger.warning(f"Ambiguous name match for '{full_name}': {len(matches)} users")
+            logger.debug(f"Ambiguous name match for '{full_name}': {len(matches)} users")
             self.warnings.append({
                 "type": "ambiguous_name",
                 "query": full_name,
@@ -191,7 +191,7 @@ class UserMatcher:
                 f"{m.get('name', '?')} (id={m.get('id')}, email={m.get('email', '?')})"
                 for m in matches
             ]
-            logger.warning(f"Ambiguous email prefix match for '{username}': {len(matches)} users")
+            logger.debug(f"Ambiguous email prefix match for '{username}': {len(matches)} users")
             self.warnings.append({
                 "type": "ambiguous_email_prefix",
                 "query": username,
@@ -361,7 +361,9 @@ class UserMatcher:
                 second_score = candidates[1][0]
                 margin = (best_score - second_score) / best_score if best_score > 0 else 0
                 if margin < 0.20:
-                    logger.warning(
+                    # Demoted to debug — AI resolver logs its own decision below,
+                    # and repeat ambiguity is expected (same users, cached AI results).
+                    logger.debug(
                         f"Fuzzy match ambiguous for '{full_name_hint}': "
                         f"top='{candidates[0][1].get('name')}' ({best_score:.1f}), "
                         f"second='{candidates[1][1].get('name')}' ({second_score:.1f}), "
