@@ -536,6 +536,12 @@ def pick_primary_local_identity(
         if user.get("administrator") or user.get("admin"):
             score -= 3
 
+        # Penalise non-person keywords (sandbox / test / demo / service / account)
+        non_person_kw = ("sandbox", "demo", "service", "test", "temporary", "temp")
+        blob = f"{username.lower()} {full_name.lower()}"
+        if any(kw in blob for kw in non_person_kw):
+            score -= 20
+
         candidates.append((score, username, full_name))
 
     if not candidates:
