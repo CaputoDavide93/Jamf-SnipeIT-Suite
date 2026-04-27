@@ -1,17 +1,52 @@
 # =============================================================================
-# EventBridge — Scheduled ECS Task Trigger
+# EventBridge — Scheduled ECS Task Triggers
 # =============================================================================
+# Four cron rules drive the suite. Each rule fires the same Fargate task
+# definition but overrides the container `command` and `RUN_MODE` env so the
+# entrypoint dispatches to a specific CLI subcommand or run-group.
 
-resource "aws_cloudwatch_event_rule" "scheduled_run" {
-  name                = "${local.full_name}-scheduled-run"
-  description         = "Trigger Jamf-SnipeIT Suite daily run"
-  schedule_expression = var.schedule_expression
+locals {
+  schedules = {
+    sync = {
+      cron        = var.schedule_expression
+      description = "Full sync (correction → user_match → snipe_to_jamf → leavers)"
+      run_mode    = "run-once"
+      command     = []
+    }
+    starters = {
+      cron        = "cron(0 17 ? * MON *)"
+      description = "Mon 17:00 UTC — Azure starters chain"
+      run_mode    = "cli"
+      command     = ["run-group", "--modules", "azure-starters,user-enrichment,peripherals-sync"]
+    }
+    housekeeping = {
+      cron        = "cron(0 21 ? * SUN *)"
+      description = "Sun 21:00 UTC — housekeeping (cleanup, ai-audit, reconciliation, username-standardize)"
+      run_mode    = "cli"
+      command     = ["run-group", "--modules", "cleanup,username-standardize,ai-audit,reconciliation"]
+    }
+    health = {
+      cron        = "cron(0 19 ? * MON,THU *)"
+      description = "Mon+Thu 19:00 UTC — health check"
+      run_mode    = "cli"
+      command     = ["run-group", "--modules", "health-check"]
+    }
+  }
+}
 
-  tags = merge(local.common_tags, { Name = "${local.full_name}-schedule" })
+resource "aws_cloudwatch_event_rule" "scheduled" {
+  for_each            = local.schedules
+  name                = "${local.full_name}-${each.key}"
+  description         = each.value.description
+  schedule_expression = each.value.cron
+
+  tags = merge(local.common_tags, { Name = "${local.full_name}-${each.key}" })
 }
 
 resource "aws_cloudwatch_event_target" "ecs_task" {
-  rule     = aws_cloudwatch_event_rule.scheduled_run.name
+  for_each = local.schedules
+
+  rule     = aws_cloudwatch_event_rule.scheduled[each.key].name
   arn      = aws_ecs_cluster.main.arn
   role_arn = aws_iam_role.eventbridge_ecs.arn
 
@@ -27,4 +62,18 @@ resource "aws_cloudwatch_event_target" "ecs_task" {
       assign_public_ip = true
     }
   }
+
+  input = jsonencode({
+    containerOverrides = [
+      merge(
+        {
+          name = "app"
+          environment = [
+            { name = "RUN_MODE", value = each.value.run_mode },
+          ]
+        },
+        length(each.value.command) > 0 ? { command = each.value.command } : {}
+      )
+    ]
+  })
 }

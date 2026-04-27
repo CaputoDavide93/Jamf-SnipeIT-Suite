@@ -37,9 +37,9 @@ output "security_group_id" {
   value       = aws_security_group.ecs_task.id
 }
 
-output "schedule_rule_name" {
-  description = "EventBridge schedule rule name"
-  value       = aws_cloudwatch_event_rule.scheduled_run.name
+output "schedule_rule_names" {
+  description = "EventBridge schedule rule names (one per scheduled run)"
+  value       = { for k, r in aws_cloudwatch_event_rule.scheduled : k => r.name }
 }
 
 output "docker_push_commands" {

@@ -260,6 +260,57 @@ def cmd_username_standardize(args, config: Config):
     return (0, results)
 
 
+def cmd_run_group(args, config: Config):
+    """Run a comma-separated list of modules under the run mutex."""
+    from infra.mutex import RunMutex
+
+    name_to_handler = {
+        "azure-starters": cmd_azure_starters,
+        "user-enrichment": cmd_user_enrichment,
+        "peripherals-sync": cmd_peripherals_sync,
+        "correction": cmd_correction,
+        "user-match": cmd_user_match,
+        "snipe-to-jamf": cmd_snipe_to_jamf,
+        "leavers": cmd_leavers,
+        "model-sync": cmd_model_sync,
+        "cleanup": cmd_cleanup,
+        "username-standardize": cmd_username_standardize,
+        "ai-audit": cmd_ai_audit,
+        "reconciliation": cmd_reconcile,
+        "health-check": cmd_health_check,
+    }
+    requested = [m.strip() for m in (args.modules or "").split(",") if m.strip()]
+    unknown = [m for m in requested if m not in name_to_handler]
+    if unknown:
+        print(f"❌ Unknown modules: {', '.join(unknown)}")
+        print(f"   Valid: {', '.join(name_to_handler)}")
+        return 2
+
+    mutex = RunMutex()
+    if not mutex.acquire():
+        print("❌ Another run already in progress — aborting")
+        return 1
+
+    failures = 0
+    try:
+        for name in requested:
+            print(f"\n{'='*60}\n  Group run: {name}\n{'='*60}")
+            try:
+                rc = name_to_handler[name](args, config)
+                if isinstance(rc, tuple):
+                    rc = rc[0]
+                if rc not in (None, 0):
+                    failures += 1
+                    print(f"⚠️  {name} exited with code {rc}")
+            except Exception as e:
+                failures += 1
+                print(f"❌ {name} raised: {e}")
+    finally:
+        mutex.release()
+
+    return 0 if failures == 0 else 1
+
+
 def cmd_run_all(args, config: Config):
     """Run all modules in sequence (except WakeUp which requires parameters)."""
     import os
@@ -658,6 +709,13 @@ Examples:
         help='Strip @domain from Snipe-IT usernames')
     uname_std_parser.add_argument('--dry-run', '-n', action='store_true')
 
+    # Run group: sequential modules under mutex (used by EventBridge cmd overrides)
+    run_group_parser = subparsers.add_parser('run-group',
+        help='Run a comma-separated list of modules sequentially under mutex')
+    run_group_parser.add_argument('--modules', '-m', required=True,
+        help='Comma-separated module names (e.g. "cleanup,ai-audit,reconciliation")')
+    run_group_parser.add_argument('--dry-run', '-n', action='store_true')
+
     # Health server command
     health_parser = subparsers.add_parser('health-server',
         help='Start health check HTTP server')
@@ -715,6 +773,7 @@ Examples:
         'user-enrichment': cmd_user_enrichment,
         'peripherals-sync': cmd_peripherals_sync,
         'username-standardize': cmd_username_standardize,
+        'run-group': cmd_run_group,
     }
     
     # Special handling for health server (long-running)
