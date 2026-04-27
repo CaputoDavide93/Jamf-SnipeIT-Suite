@@ -90,7 +90,7 @@ module "jamf_snipeit_suite" {
   ai_api_key = var.ai_api_key
 
   # -- Schedule: daily 6am UTC (7am BST) --
-  schedule_expression = "cron(0 6 * * ? *)"
+  schedule_expression = "cron(0 17 ? * TUE *)"  # Tue 17:00 UTC = 18:00 UK BST
 
   # -- Container sizing (0.25 vCPU, 512MB — plenty for API calls) --
   container_cpu    = 256
