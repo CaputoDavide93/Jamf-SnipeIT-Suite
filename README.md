@@ -11,7 +11,7 @@
 
 > **Unified Asset Management & Synchronisation Platform with AI-powered matching**
 
-Automated daily synchronisation of devices, users, and accessories between **Jamf Pro**, **Snipe-IT**, **Azure AD / Microsoft Entra ID**, and **HiBob**. Runs as an ECS Fargate scheduled task on AWS with zero-touch user provisioning.
+Automated weekly synchronisation of devices, users, and accessories between **Jamf Pro**, **Snipe-IT**, **Azure AD / Microsoft Entra ID**, and **HiBob**. Runs as ECS Fargate tasks on AWS, scheduled by four EventBridge rules covering provisioning, sync, health checks and housekeeping. Zero-touch user provisioning.
 
 ---
 
@@ -31,7 +31,7 @@ Automated daily synchronisation of devices, users, and accessories between **Jam
 
 ## What it does
 
-Every morning at 6am UTC, the suite:
+Across the week (Mon/Tue evenings + Sun late, all UTC), the suite:
 
 1. **Provisions new starters** from Azure AD into Snipe-IT
 2. **Enriches** existing Snipe-IT profiles with job titles, departments, phone numbers from Azure
@@ -81,30 +81,44 @@ No manual intervention needed for the 95% happy path. Ambiguous cases go to a Sl
 
 ## Modules
 
-### Daily (every day)
-| Module | Time | Description |
-|--------|------|-------------|
-| **Correction** | 06:15 | Validates existing Snipe-IT assignments against Jamf local accounts. Auto-corrects mismatches on exact matches; flags fuzzy/AI mismatches for Slack review. |
-| **User Match** | 06:30 | Main provisioning. Matches Jamf computers to Snipe-IT users, creates assets, checks out. Auto-creates Snipe-IT users from Azure AD if needed. |
-| **Snipe-to-Jamf** | 07:00 | Writes Snipe-IT asset ID EA back to Jamf (identity fields are never touched). |
-| **Leavers** | 07:30 | Sets Pending status on assets for disabled/leaver Azure AD users. Keeps the assignment for tracking. |
+Four EventBridge rules cover all 14 modules. Each rule fires the same Fargate
+task with a `containerOverrides.command` so the entrypoint dispatches to the
+right CLI. All times UTC.
 
-### Weekly
-| Module | Time | Description |
-|--------|------|-------------|
-| **Model Sync** | Sun 01:00 | Ensures hardware models exist in Snipe-IT, creates missing ones. |
-| **Username Standardize** | Sun 02:30 | Strips `@domain` from Snipe-IT usernames for consistency. |
-| **Cleanup** | Sun 03:00 | Merges duplicate users, removes junk accounts. |
-| **AI Audit** | Sun 04:00 | **AI-powered cross-platform audit** — finds security risks, data inconsistencies, anomalies. Posts structured Slack report. |
-| **Reconciliation** | Sun 05:00 | Inventory diff Jamf ↔ Snipe-IT. Identifies devices in one system but not the other. |
-| **Azure Starters** | Mon 06:00 | Creates Snipe-IT users for new hires from Azure AD starters group. |
-| **User Enrichment** | Mon 06:30 | Pushes Azure AD job titles, departments, phone numbers to Snipe-IT. |
-| **Peripherals Sync** | Mon 08:00 | Syncs HiBob equipment to Snipe-IT accessories with name mapping. |
+### Mon 17:00 UTC — `starters` group
+| Module | Description |
+|--------|-------------|
+| **Azure Starters** | Creates Snipe-IT users for new hires from Azure AD starters group. |
+| **User Enrichment** | Pushes Azure AD job titles, departments, phone numbers to Snipe-IT. |
+| **Peripherals Sync** | Syncs HiBob equipment to Snipe-IT accessories with name mapping. |
+
+### Tue 17:00 UTC — `sync` (full run-once)
+| Module | Description |
+|--------|-------------|
+| **Model Sync** | Ensures hardware models exist in Snipe-IT, creates missing ones. |
+| **Correction** | Validates existing Snipe-IT assignments against Jamf local accounts. Auto-corrects mismatches on exact matches; flags fuzzy/AI mismatches for Slack review. |
+| **User Match** | Main provisioning. Matches Jamf computers to Snipe-IT users, creates assets (auto-tagged `CF-####`), checks out. Auto-creates Snipe-IT users from Azure AD if needed. |
+| **Snipe-to-Jamf** | Writes Snipe-IT asset ID EA back to Jamf (identity fields are never touched). |
+| **Leavers** | Sets Pending status on assets for disabled/leaver Azure AD users. Keeps the assignment for tracking. |
+
+### Mon + Thu 19:00 UTC — `health` group
+| Module | Description |
+|--------|-------------|
+| **Health Check** | Scans for stuck Pending, checked-out-to-disabled, stale pending (>30d), orphan users, invalid states. Posts Slack only if findings. |
+
+### Sun 21:00 UTC — `housekeeping` group
+| Module | Description |
+|--------|-------------|
+| **Cleanup** | Merges duplicate users, removes junk accounts. |
+| **Username Standardize** | Strips `@domain` from Snipe-IT usernames for consistency. |
+| **AI Audit** | AI-powered cross-platform audit — finds security risks, data inconsistencies, anomalies. Posts structured Slack report. |
+| **Reconciliation** | Inventory diff Jamf ↔ Snipe-IT. Identifies devices in one system but not the other. |
 
 ### On-demand
 | Module | Description |
 |--------|-------------|
-| **WakeUp** | Sends MDM redeploy commands to unresponsive Jamf devices. |
+| **WakeUp** | Sends MDM redeploy commands to unresponsive Jamf devices. CLI / interactive only. |
+| **`run-group --modules a,b,c`** | Generic CLI to run any sequence of modules under the shared run mutex. Used by all group EventBridge rules. |
 
 ---
 
@@ -189,7 +203,7 @@ terraform/
     ecs.tf           Cluster, task definition, security group
     iam.tf           Execution role, task role, EventBridge role
     secrets.tf       12 SSM SecureString parameters
-    eventbridge.tf   Daily 6am UTC scheduled trigger
+    eventbridge.tf   Four scheduled rules (starters / sync / health / housekeeping)
     cloudwatch.tf    Log group (90-day retention)
     s3_cache.tf      AI resolver cache bucket
   environments/prod/
@@ -223,7 +237,7 @@ docker build --platform linux/amd64 -t <ECR_URL>:latest .
 docker push <ECR_URL>:latest
 ```
 
-EventBridge triggers the task automatically at 06:00 UTC daily.
+Four EventBridge rules trigger the task on the schedule shown in the Modules section above. Each rule overrides the container `command` so the entrypoint dispatches to the right CLI subcommand.
 
 ### Local / Docker Compose (development)
 

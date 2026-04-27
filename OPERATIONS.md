@@ -173,31 +173,34 @@ The ECS task reads SSM parameters at container start — just trigger a new run 
 
 ## Schedule overview
 
-All times UTC.
+All times UTC. Driven by four EventBridge rules, each fires the same Fargate
+task with a `containerOverrides.command` so the entrypoint dispatches to the
+right CLI subcommand or `run-group`.
 
-| Time | Module | Frequency |
-|------|--------|-----------|
-| 01:00 | Model Sync | Sunday |
-| 02:30 | Username Standardize | Sunday |
-| 03:00 | Cleanup | Sunday |
-| 04:00 | AI Audit | Sunday |
-| 05:00 | Reconciliation | Sunday |
-| 06:00 | Azure Starters | Monday |
-| 06:15 | Correction | Daily |
-| 06:30 | User Match | Daily |
-| 06:30 | User Enrichment | Monday |
-| 07:00 | Snipe-to-Jamf | Daily |
-| 07:30 | Leavers | Daily |
-| 08:00 | Peripherals Sync | Monday |
+| EventBridge rule | Cron (UTC) | UK time | Modules executed |
+|------------------|------------|---------|------------------|
+| `…-starters`     | Mon 17:00  | Mon 18:00 BST | azure-starters → user-enrichment → peripherals-sync |
+| `…-sync`         | Tue 17:00  | Tue 18:00 BST | run-once: model-sync, correction, user-match, snipe-to-jamf, leavers (+ starters/enrichment/peripherals re-run) |
+| `…-health`       | Mon+Thu 19:00 | 20:00 BST | health-check |
+| `…-housekeeping` | Sun 21:00  | Sun 22:00 BST | cleanup → username-standardize → ai-audit → reconciliation |
+
+`wakeup` is intentionally manual — invoke via CLI or interactive menu.
+
+Group rules use the new CLI subcommand `run-group --modules a,b,c` which
+serialises modules under `RunMutex` so two rules firing close together can't
+collide.
 
 ## Emergency procedures
 
 ### Stop all scheduled runs
 
-Disable the EventBridge rule:
+Disable every EventBridge rule:
 ```bash
-aws events disable-rule --name jamf-snipeit-suite-prod-scheduled-run
+for r in starters sync health housekeeping; do
+  aws events disable-rule --name jamf-snipeit-suite-prod-$r --region eu-west-1
+done
 ```
+Re-enable with `enable-rule` instead of `disable-rule`.
 
 ### Stop a running task
 
