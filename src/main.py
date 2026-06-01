@@ -216,6 +216,18 @@ def cmd_ai_audit(args, config: Config):
     return (0, results)
 
 
+def cmd_monthly_digest(args, config: Config):
+    """Monthly digest — aggregate findings and send one Slack report."""
+    from modules.maintenance.monthly_digest import MonthlyDigestModule
+    dry_run = getattr(args, 'dry_run', False)
+    module = MonthlyDigestModule(config)
+    try:
+        module.run(dry_run=dry_run)
+    finally:
+        module.close()
+    return 0
+
+
 def cmd_cleanup(args, config: Config):
     """Merge duplicate users, remove junk."""
     from modules.maintenance import CleanupModule
@@ -278,6 +290,7 @@ def cmd_run_group(args, config: Config):
         "ai-audit": cmd_ai_audit,
         "reconciliation": cmd_reconcile,
         "health-check": cmd_health_check,
+        "monthly-digest": cmd_monthly_digest,
     }
     requested = [m.strip() for m in (args.modules or "").split(",") if m.strip()]
     unknown = [m for m in requested if m not in name_to_handler]

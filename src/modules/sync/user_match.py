@@ -297,17 +297,16 @@ class UserMatchModule:
         
         progress.finish(extra=f"created={results['assets_created']}, updated={results['assets_updated']}, errors={results['errors']}")
         
-        # Send Slack notification for ambiguous matches so admin can fix them
-        if self._user_matcher and self._user_matcher.warnings:
-            self.slack.notify_matching_warnings(self._user_matcher.warnings)
+        if self.config.slack.notify_inline:
+            if self._user_matcher and self._user_matcher.warnings:
+                self.slack.notify_matching_warnings(self._user_matcher.warnings)
 
-        # Send Slack notification for unmatched devices
-        if results.get("unmatched_devices"):
-            self.slack.notify_investigation_needed(
-                channel_id=self.config.slack.channel_id,
-                title="User Match - Unmatched Devices",
-                items=results["unmatched_devices"],
-            )
+            if results.get("unmatched_devices"):
+                self.slack.notify_investigation_needed(
+                    channel_id=self.config.slack.channel_id,
+                    title="User Match - Unmatched Devices",
+                    items=results["unmatched_devices"],
+                )
 
         # Print summary
         self._print_summary(results, dry_run)

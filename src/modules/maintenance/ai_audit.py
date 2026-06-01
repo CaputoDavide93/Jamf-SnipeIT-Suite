@@ -94,7 +94,7 @@ class AIAuditModule:
 
         # Step 4: Send Slack report
         logger.info("[4/4] Sending report...")
-        if not dry_run and findings:
+        if not dry_run and findings and self.config.slack.notify_inline:
             self._send_slack_report(findings, results["stats"])
         elif dry_run and findings:
             logger.info("[DRY-RUN] Would send Slack report with findings:")

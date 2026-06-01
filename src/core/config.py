@@ -92,6 +92,7 @@ class SlackConfig:
     notify_on_error: bool = True
     notify_disabled_with_assets: bool = True
     notify_module_summary: bool = False
+    notify_inline: bool = True
 
 
 @dataclass
@@ -444,6 +445,7 @@ class Config:
             notify_on_error=bool(data.get("notify_on_error", True)),
             notify_disabled_with_assets=bool(data.get("notify_disabled_with_assets", True)),
             notify_module_summary=bool(data.get("notify_module_summary", False)),
+            notify_inline=bool(data.get("notify_inline", True)),
         )
     
     def _parse_hibob(self) -> HiBobConfig:

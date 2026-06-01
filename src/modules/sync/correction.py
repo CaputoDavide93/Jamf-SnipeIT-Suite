@@ -220,8 +220,7 @@ class CorrectionModule:
 
         self._print_summary(results, dry_run)
 
-        # Send Slack notification for mismatches needing investigation
-        if results.get("details"):
+        if self.config.slack.notify_inline and results.get("details"):
             mismatch_items = [
                 d for d in results["details"] if d.get("type") == "mismatch"
             ]

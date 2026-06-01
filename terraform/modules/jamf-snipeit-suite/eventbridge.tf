@@ -31,6 +31,12 @@ locals {
       run_mode    = "cli"
       command     = ["run-group", "--modules", "health-check"]
     }
+    monthly-digest = {
+      cron        = "cron(0 9 ? * 2#1 *)"
+      description = "First Mon of month 09:00 UTC — monthly digest Slack report"
+      run_mode    = "cli"
+      command     = ["run-group", "--modules", "monthly-digest"]
+    }
   }
 }
 

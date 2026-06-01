@@ -293,7 +293,7 @@ class HealthCheckModule:
             f"{len(results['invalid_in_stock'])} invalid) ==="
         )
 
-        if total > 0 and not dry_run:
+        if total > 0 and not dry_run and self.config.slack.notify_inline:
             self._send_slack(results)
 
         return results
