@@ -13,6 +13,13 @@ from clients.snipeit import SnipeITClient
 logger = logging.getLogger(__name__)
 
 
+# Usernames that must keep their full email-style form — never stripped.
+_PRESERVED_USERNAMES = frozenset({
+    "davide.caputo@xdesign.com",
+    "daniel.sample@createfuture.com",
+})
+
+
 class UsernameStandardizer:
     """Standardize Snipe-IT usernames to plain (no @domain) format."""
 
@@ -59,6 +66,11 @@ class UsernameStandardizer:
             # Already plain format — skip
             if "@" not in username:
                 results["already_plain"] += 1
+                continue
+
+            # Preserved — must keep full email-style username
+            if username.lower() in _PRESERVED_USERNAMES:
+                results["skipped"] += 1
                 continue
 
             # Extract the part before @
