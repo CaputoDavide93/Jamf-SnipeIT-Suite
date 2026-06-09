@@ -3,8 +3,10 @@ Jamf-SnipeIT Suite - Username Standardization Module
 Converts all email-style usernames (user@domain.com) to plain format (user.name).
 One-time migration module, safe to re-run (idempotent).
 """
+import json
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List
 
 from core.config import Config
@@ -13,11 +15,19 @@ from clients.snipeit import SnipeITClient
 logger = logging.getLogger(__name__)
 
 
-# Usernames that must keep their full email-style form — never stripped.
-_PRESERVED_USERNAMES = frozenset({
-    "davide.caputo@xdesign.com",
-    "daniel.sample@createfuture.com",
-})
+def _load_preserved_usernames() -> frozenset:
+    """Load preserved_usernames from user_overrides.json (lowercase for comparison)."""
+    for p in (Path("config/user_overrides.json"), Path("/app/config/user_overrides.json")):
+        if p.exists():
+            try:
+                data = json.loads(p.read_text())
+                names = data.get("preserved_usernames", [])
+                if names:
+                    logger.debug(f"Loaded {len(names)} preserved usernames from {p}")
+                return frozenset(n.lower() for n in names)
+            except Exception as e:
+                logger.warning(f"Could not load preserved_usernames from {p}: {e}")
+    return frozenset()
 
 
 class UsernameStandardizer:
@@ -41,6 +51,7 @@ class UsernameStandardizer:
         user@company.com -> user.name  (the part before @)
         """
         logger.info(f"Starting Username Standardization: dry_run={dry_run}")
+        preserved = _load_preserved_usernames()
 
         results: Dict[str, Any] = {
             "total_users": 0,
@@ -69,7 +80,7 @@ class UsernameStandardizer:
                 continue
 
             # Preserved — must keep full email-style username
-            if username.lower() in _PRESERVED_USERNAMES:
+            if username.lower() in preserved:
                 results["skipped"] += 1
                 continue
 

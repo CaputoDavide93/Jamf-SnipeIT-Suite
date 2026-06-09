@@ -5,6 +5,9 @@
 # Temporary/one-off scripts (local only)
 Temp/
 
+# ⚠️ PII: Contains real names — Bitbucket only, not GitHub
+config/user_overrides.json
+
 # ⚠️ SECURITY: Configuration files with secrets - NEVER commit these!
 config/config.yaml
 config.yaml
