@@ -288,6 +288,12 @@ matching:
 
 Every YAML key has an env var equivalent: `JAMF_BASE_URL`, `SNIPEIT_API_TOKEN`, `AZURE_CLIENT_SECRET`, etc. The app automatically uses env vars when `config.yaml` is missing.
 
+Additional toggles:
+- `LOG_JSON=true` — emit JSON logs
+- `HEALTH_AUTH_TOKEN=...` — require bearer token on `/health` endpoints (also binds health server to `127.0.0.1` by default)
+- `MUTEX_LOCK_REFRESH_SEC=300` — refresh interval for the SSM mutex TTL
+- `MUTEX_LOCK_PARAM=/jamf-snipeit-suite-prod/run-lock` — override lock name per environment
+
 ### User overrides (`config/user_overrides.json`)
 
 For edge cases that matching can't solve automatically:

@@ -6,6 +6,7 @@ Provides /health, /ready, and /metrics endpoints.
 import json
 import threading
 import time
+import os
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Dict, Optional, Callable
@@ -13,6 +14,13 @@ from dataclasses import dataclass, field
 import logging
 
 logger = logging.getLogger('jamf-snipeit-health')
+
+
+def _is_authorized(auth_token: Optional[str], header_value: str) -> bool:
+    """Return True if auth is not required or header matches bearer token."""
+    if not auth_token:
+        return True
+    return header_value == f"Bearer {auth_token}"
 
 
 @dataclass
@@ -52,7 +60,7 @@ class HealthCheckServer:
         /status  - Detailed status JSON
     """
     
-    def __init__(self, port: int = 8080, host: str = "0.0.0.0"):
+    def __init__(self, port: int = 8080, host: str = "127.0.0.1"):
         self.port = port
         self.host = host
         self.status = HealthStatus()
@@ -177,11 +185,16 @@ class HealthCheckServer:
     def _create_handler(self):
         """Create HTTP request handler with access to health server."""
         health_server = self
-        
+        auth_token = os.environ.get("HEALTH_AUTH_TOKEN")
+
         class HealthHandler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
                 # Suppress default logging
                 pass
+
+            def _authorized(self) -> bool:
+                header = self.headers.get("Authorization", "")
+                return _is_authorized(auth_token, header)
             
             def _send_response(self, status_code: int, content_type: str, body: str):
                 self.send_response(status_code)
@@ -191,6 +204,9 @@ class HealthCheckServer:
                 self.wfile.write(body.encode('utf-8'))
             
             def do_GET(self):
+                if not self._authorized():
+                    self._send_response(401, 'application/json', json.dumps({'status': 'unauthorized'}))
+                    return
                 if self.path == '/health' or self.path == '/healthz':
                     # Liveness probe - is the service running?
                     status = health_server._get_status_dict()

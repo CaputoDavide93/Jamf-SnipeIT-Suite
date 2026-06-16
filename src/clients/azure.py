@@ -6,6 +6,7 @@ import logging
 import time
 import requests
 from typing import Any, Dict, List, Optional
+from requests.adapters import HTTPAdapter, Retry
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,13 @@ class AzureClient:
         
         self.authority = f"https://login.microsoftonline.com/{tenant_id}"
         self.session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=30,
+            max_retries=Retry(total=0),
+        )
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         
         self._token: Optional[str] = None
         self._token_exp: float = 0
@@ -109,11 +117,22 @@ class AzureClient:
                 
                 # Handle rate limiting (429)
                 if response.status_code == 429:
-                    retry_after = int(response.headers.get("Retry-After", self.retry_delay * attempt))
+                    retry_after_header = response.headers.get("Retry-After")
+                    try:
+                        retry_after = min(int(retry_after_header), 120) if retry_after_header else self.retry_delay * attempt
+                    except ValueError:
+                        retry_after = self.retry_delay * attempt
                     logger.warning(f"Rate limited by Graph API. Waiting {retry_after}s (attempt {attempt})")
                     time.sleep(retry_after)
                     continue
-                
+
+                # Handle auth errors once (token may be stale)
+                if response.status_code in (401, 403) and attempt < self.max_retries:
+                    logger.warning(f"Graph API auth failed ({response.status_code}); refreshing token and retrying")
+                    self._token = None
+                    time.sleep(self.retry_delay)
+                    continue
+
                 # Handle server errors (5xx) with retry
                 if response.status_code >= 500:
                     delay = self.retry_delay * (2 ** (attempt - 1))

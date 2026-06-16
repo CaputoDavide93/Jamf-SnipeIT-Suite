@@ -177,9 +177,14 @@ All times UTC. Driven by four EventBridge rules, each fires the same Fargate
 task with a `containerOverrides.command` so the entrypoint dispatches to the
 right CLI subcommand or `run-group`.
 
+**Scheduling safety**
+- Each run grabs a mutex in SSM and now refreshes it periodically so long runs stay protected.
+- APScheduler jobs have a small random `jitter` (default 180s) to avoid hitting APIs in a single burst when multiple jobs are adjacent.
+- Health server binds to `127.0.0.1` by default; set `HEALTH_AUTH_TOKEN` if exposing it via a sidecar/ALB.
+
 | EventBridge rule | Cron (UTC) | UK time | Modules executed |
 |------------------|------------|---------|------------------|
-| `…-starters`     | Mon 17:00  | Mon 18:00 BST | azure-starters → user-enrichment → peripherals-sync |
+| `…-starters`     | Mon 05:50  | Mon 06:50 BST | azure-starters → user-enrichment → peripherals-sync |
 | `…-sync`         | Tue 17:00  | Tue 18:00 BST | run-once: model-sync, correction, user-match, snipe-to-jamf, leavers (+ starters/enrichment/peripherals re-run) |
 | `…-health`       | Mon+Thu 19:00 | 20:00 BST | health-check |
 | `…-housekeeping` | Sun 21:00  | Sun 22:00 BST | cleanup → username-standardize → ai-audit → reconciliation |

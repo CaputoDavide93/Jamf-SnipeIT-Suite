@@ -155,7 +155,8 @@ variable "ai_api_key" {
 variable "schedule_expression" {
   type        = string
   description = "EventBridge cron/rate expression for the scheduled run"
-  default     = "cron(0 6 * * ? *)"  # Daily 6am UTC
+  # Default: Tue 17:00 UTC full-sync run
+  default     = "cron(0 17 ? * TUE *)"
 }
 
 # -- Monitoring --

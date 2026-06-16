@@ -7,6 +7,7 @@ import re
 import time
 import requests
 from typing import Any, Dict, List, Optional
+from requests.adapters import HTTPAdapter, Retry
 from xml.sax.saxutils import escape as xml_escape
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,13 @@ class JamfClient:
         self.retry_delay = retry_delay
         
         self.session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=20,
+            pool_maxsize=50,
+            max_retries=Retry(total=0),  # manual retry logic below
+        )
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         self._token: Optional[str] = None
         self._token_exp: float = 0
     
@@ -208,7 +216,15 @@ class JamfClient:
                 
                 # Handle 429 - rate limit
                 if response.status_code == 429:
-                    delay = self.retry_delay * (2 ** (attempt - 1))
+                    retry_after = response.headers.get("Retry-After")
+                    delay = None
+                    if retry_after:
+                        try:
+                            delay = min(int(retry_after), 120)
+                        except ValueError:
+                            delay = None
+                    if delay is None:
+                        delay = self.retry_delay * (2 ** (attempt - 1))
                     logger.warning(
                         f"429 Rate limit (attempt {attempt}/{self.max_retries}). "
                         f"Retrying in {delay}s..."

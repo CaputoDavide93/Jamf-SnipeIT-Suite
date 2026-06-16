@@ -6,6 +6,7 @@ Unified tool for asset management between Jamf Pro, Snipe-IT, and Azure AD.
 import argparse
 import sys
 import logging
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -27,16 +28,36 @@ from modules import (
 def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> logging.Logger:
     """Configure logging for the application."""
     level = logging.DEBUG if verbose else logging.INFO
-    
+
     handlers = [logging.StreamHandler(sys.stdout)]
     if log_file:
         handlers.append(logging.FileHandler(log_file))
-    
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=handlers
-    )
+
+    log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+    if os.environ.get('LOG_JSON', 'false').lower() in ('1', 'true'):
+        try:
+            from pythonjsonlogger import jsonlogger
+            formatter = jsonlogger.JsonFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
+            logging.basicConfig(level=level, handlers=handlers)
+            for h in handlers:
+                h.setFormatter(formatter)
+        except Exception:
+            logging.basicConfig(level=level, format=log_format, handlers=handlers)
+    else:
+        logging.basicConfig(
+            level=level,
+            format=log_format,
+            handlers=handlers
+        )
+
+    # Enforce simple log retention
+    try:
+        from infra.helpers import remove_old_logs
+        log_dir = os.path.dirname(log_file) if log_file else './logs'
+        remove_old_logs(log_dir, max_days=30)
+    except Exception:
+        pass
+
     return logging.getLogger('jamf-snipeit-suite')
 
 
@@ -734,8 +755,8 @@ Examples:
         help='Start health check HTTP server')
     health_parser.add_argument('--port', '-p', type=int, default=8080,
         help='Port to listen on (default: 8080)')
-    health_parser.add_argument('--host', default='0.0.0.0',
-        help='Host to bind to (default: 0.0.0.0)')
+    health_parser.add_argument('--host', default='127.0.0.1',
+        help='Host to bind to (default: 127.0.0.1)')
     
     args = parser.parse_args()
     

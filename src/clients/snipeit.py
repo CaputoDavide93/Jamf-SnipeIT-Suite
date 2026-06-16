@@ -6,6 +6,7 @@ import logging
 import time
 import requests
 from typing import Any, Dict, List, Optional
+from requests.adapters import HTTPAdapter, Retry
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,16 @@ class SnipeITClient:
             "Accept": "application/json",
             "Content-Type": "application/json",
         })
+        adapter = HTTPAdapter(
+            pool_connections=20,
+            pool_maxsize=50,
+            max_retries=Retry(
+                total=0,  # handled manually below
+                backoff_factor=0,
+            ),
+        )
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
     
     def _url(self, path: str) -> str:
         """Build full URL for API endpoint."""
@@ -94,12 +105,21 @@ class SnipeITClient:
                 
                 # Handle rate limiting
                 if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    delay = None
+                    if retry_after:
+                        try:
+                            delay = min(int(retry_after), 120)
+                        except ValueError:
+                            delay = None
+                    if delay is None:
+                        delay = self.rate_limit_wait * (2 ** (attempt - 1))
                     if attempt < self.max_retries:
                         logger.warning(
                             f"Rate limit hit (attempt {attempt}/{self.max_retries}). "
-                            f"Waiting {self.rate_limit_wait}s..."
+                            f"Waiting {delay}s..."
                         )
-                        time.sleep(self.rate_limit_wait)
+                        time.sleep(delay)
                         continue
                     else:
                         logger.error("Rate limit exceeded after max retries")
@@ -113,7 +133,7 @@ class SnipeITClient:
                 # Handle other errors (retry-able)
                 if response.status_code >= 400:
                     # Truncate and sanitize — response body may contain reflected credentials
-                    safe_body = response.text[:200].replace(self.api_token[:8], "***") if response.text else ""
+                    safe_body = "[REDACTED]"
                     logger.error(f"API error {response.status_code}: {safe_body}")
                     if attempt < self.max_retries:
                         delay = self.retry_delay * (2 ** (attempt - 1))

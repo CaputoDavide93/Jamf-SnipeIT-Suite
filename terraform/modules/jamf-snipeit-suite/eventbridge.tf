@@ -14,8 +14,8 @@ locals {
       command     = []
     }
     starters = {
-      cron        = "cron(0 17 ? * MON *)"
-      description = "Mon 17:00 UTC — Azure starters chain"
+      cron        = "cron(50 5 ? * MON *)"  # 05:50 UTC staggered starters
+      description = "Mon 05:50 UTC — Azure starters chain"
       run_mode    = "cli"
       command     = ["run-group", "--modules", "azure-starters,user-enrichment,peripherals-sync"]
     }

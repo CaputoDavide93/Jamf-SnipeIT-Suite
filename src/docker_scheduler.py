@@ -586,6 +586,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     scheduler.add_listener(job_listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
     
     jobs_config = cfg.scheduler.get('jobs', {})
+    jitter = int(cfg.scheduler.get('jitter_seconds', 120))  # spreads starts to avoid collisions
     
     # Add Leavers job
     if jobs_config.get('leavers', {}).get('enabled', False):
@@ -594,7 +595,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("Leavers", run_leavers),
             CronTrigger.from_crontab(cron),
             id='leavers',
-            name='Leavers Module'
+            name='Leavers Module',
+            jitter=jitter,
         )
         logger.info(f"  Leavers: {cron}")
     
@@ -605,7 +607,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("Snipe-to-Jamf", run_snipe_to_jamf),
             CronTrigger.from_crontab(cron),
             id='snipe_to_jamf',
-            name='Snipe-to-Jamf Sync'
+            name='Snipe-to-Jamf Sync',
+            jitter=jitter,
         )
         logger.info(f"  Snipe-to-Jamf: {cron}")
     
@@ -616,7 +619,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("User Match", run_user_match),
             CronTrigger.from_crontab(cron),
             id='user_match',
-            name='User Match Module'
+            name='User Match Module',
+            jitter=jitter,
         )
         logger.info(f"  User Match: {cron}")
     
@@ -627,7 +631,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("Model Sync", run_model_sync),
             CronTrigger.from_crontab(cron),
             id='model_sync',
-            name='Model Sync Module'
+            name='Model Sync Module',
+            jitter=jitter,
         )
         logger.info(f"  Model Sync: {cron}")
     
@@ -638,7 +643,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("Azure Starters", run_azure_starters),
             CronTrigger.from_crontab(cron),
             id='azure_starters',
-            name='Azure Starters Module'
+            name='Azure Starters Module',
+            jitter=jitter,
         )
         logger.info(f"  Azure Starters: {cron}")
     
@@ -649,7 +655,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("Correction", run_correction),
             CronTrigger.from_crontab(cron),
             id='correction',
-            name='Self-Healing Correction'
+            name='Self-Healing Correction',
+            jitter=jitter,
         )
         logger.info(f"  Correction: {cron}")
 
@@ -660,7 +667,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("Cleanup", run_cleanup),
             CronTrigger.from_crontab(cron),
             id='cleanup',
-            name='Cleanup & Duplicate Detection'
+            name='Cleanup & Duplicate Detection',
+            jitter=jitter,
         )
         logger.info(f"  Cleanup: {cron}")
 
@@ -671,7 +679,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("User Enrichment", run_user_enrichment),
             CronTrigger.from_crontab(cron),
             id='user_enrichment',
-            name='User Enrichment Module'
+            name='User Enrichment Module',
+            jitter=jitter,
         )
         logger.info(f"  User Enrichment: {cron}")
 
@@ -682,7 +691,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("Peripherals Sync", run_peripherals_sync),
             CronTrigger.from_crontab(cron),
             id='peripherals_sync',
-            name='Peripherals Sync (HiBob)'
+            name='Peripherals Sync (HiBob)',
+            jitter=jitter,
         )
         logger.info(f"  Peripherals Sync: {cron}")
 
@@ -693,7 +703,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("AI Audit", run_ai_audit),
             CronTrigger.from_crontab(cron),
             id='ai_audit',
-            name='AI Cross-Platform Audit'
+            name='AI Cross-Platform Audit',
+            jitter=jitter,
         )
         logger.info(f"  AI Audit: {cron}")
 
@@ -704,7 +715,8 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
             lambda: run_module_safe("Health Check", run_health_check),
             CronTrigger.from_crontab(cron),
             id='health_check',
-            name='Health Check'
+            name='Health Check',
+            jitter=jitter,
         )
         logger.info(f"  Health Check: {cron}")
 
