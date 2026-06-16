@@ -24,6 +24,50 @@ Successful auto-corrections **do not** generate Slack alerts — silent operatio
 
 ## Common tasks
 
+### Deploying a new image
+
+Run these three commands in order. Docker Desktop must be running.
+
+```bash
+# 1. ECR login (token valid 12h)
+aws ecr get-login-password --region eu-west-1 \
+  | docker login --username AWS --password-stdin \
+    <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com
+
+# 2. Build — MUST be linux/amd64; ARM64 silently fails on Fargate
+docker build --platform linux/amd64 \
+  -t <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-prod:latest .
+
+# 3. Push
+docker push \
+  <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-prod:latest
+```
+
+The ECS task definition already references `:latest` — no task-def update needed.
+The next EventBridge trigger picks up the new image automatically.
+
+To verify the push landed:
+```bash
+aws ecr describe-images \
+  --repository-name jamf-snipeit-suite-prod \
+  --region eu-west-1 \
+  --query 'sort_by(imageDetails,&imagePushedAt)[-1].[imagePushedAt,imageDigest]' \
+  --output table
+```
+
+To smoke-test without waiting for a schedule:
+```bash
+aws ecs run-task \
+  --cluster jamf-snipeit-suite-prod \
+  --task-definition jamf-snipeit-suite-prod \
+  --launch-type FARGATE \
+  --overrides '{"containerOverrides":[{"name":"app","command":["health-check"]}]}' \
+  --network-configuration "awsvpcConfiguration={subnets=[<SUBNET_ID>],securityGroups=[<SECURITY_GROUP_ID>],assignPublicIp=ENABLED}" \
+  --region eu-west-1
+```
+
+---
+
 ### Adding a user override
 
 When matching consistently picks the wrong Snipe-IT user for a given Jamf local account:
@@ -40,11 +84,7 @@ When matching consistently picks the wrong Snipe-IT user for a given Jamf local 
      }
    }
    ```
-2. Rebuild the Docker image and push to ECR:
-   ```bash
-   docker build --platform linux/amd64 -t <ECR_URL>:latest .
-   docker push <ECR_URL>:latest
-   ```
+2. Rebuild the Docker image and push to ECR (see [Deploying a new image](#deploying-a-new-image) below).
 3. Commit the change to git.
 4. The next 06:00 run will use the new override immediately.
 
