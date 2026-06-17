@@ -4,9 +4,9 @@ Weekly sync of devices, users, and accessories between Jamf Pro, Snipe-IT, Azure
 
 ## Stack
 - Python 3.12
-- Jamf Pro API · Snipe-IT API · HiBob API · Microsoft Graph API
+- Jamf Pro API / Snipe-IT API / HiBob API / Microsoft Graph API
 - AWS ECS Fargate + EventBridge (4 scheduled tasks)
-- Docker · Terraform
+- Docker / Terraform
 
 ## Quick Start
 
@@ -27,4 +27,4 @@ docker compose up
 
 ---
 
-Full docs → [Jamf-SnipeIT Suite on Confluence](https://xsolutions.atlassian.net/wiki/pages/viewpage.action?pageId=4493508620)
+Full docs -> [Jamf-SnipeIT Suite on Confluence](https://xsolutions.atlassian.net/wiki/pages/viewpage.action?pageId=4493508620)
