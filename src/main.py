@@ -374,11 +374,13 @@ def cmd_run_all(args, config: Config):
     print("   (WakeUp module skipped - requires explicit parameters)\n")
     
     modules = [
+        # Rehire Detection first: un-ghost returning employees before the
+        # sync chain (Correction/User Match) and Leavers evaluate them.
+        ("Rehire Detection", lambda: cmd_rehire_detection(args, config)),
         ("Model Sync", lambda: cmd_model_sync(args, config)),
         ("Correction", lambda: cmd_correction(args, config)),
         ("User Match", lambda: cmd_user_match(args, config)),
         ("Snipe-to-Jamf", lambda: cmd_snipe_to_jamf(args, config)),
-        ("Rehire Detection", lambda: cmd_rehire_detection(args, config)),
         ("Leavers", lambda: cmd_leavers(args, config)),
     ]
     
