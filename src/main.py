@@ -14,7 +14,8 @@ from typing import Optional
 from core.config import get_config, Config
 from infra.health import start_health_server, get_health_server
 from modules import (
-    LeaversModule, 
+    LeaversModule,
+    RehireDetectionModule, 
     SnipeToJamfModule, 
     UserMatchModule, 
     ModelSyncModule, 
@@ -84,6 +85,25 @@ def cmd_leavers(args, config: Config):
     errors = results.get('errors', 0)
     error_count = len(errors) if isinstance(errors, list) else errors
     
+    # Return both exit code and results for summary
+    return (0 if error_count == 0 else 1, results)
+
+
+def cmd_rehire_detection(args, config: Config):
+    """Run Rehire Detection - restore [Disabled] users whose AAD account is active again."""
+    print("\n\U0001F501 Running Rehire Detection Module...")
+    print("   Restoring [Disabled] Snipe-IT users whose Azure AD account is active again.\n")
+
+    module = RehireDetectionModule(config)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
+
+    # errors can be a list or int depending on module
+    errors = results.get('errors', 0)
+    error_count = len(errors) if isinstance(errors, list) else errors
+
     # Return both exit code and results for summary
     return (0 if error_count == 0 else 1, results)
 
@@ -304,6 +324,7 @@ def cmd_run_group(args, config: Config):
         "correction": cmd_correction,
         "user-match": cmd_user_match,
         "snipe-to-jamf": cmd_snipe_to_jamf,
+        "rehire-detection": cmd_rehire_detection,
         "leavers": cmd_leavers,
         "model-sync": cmd_model_sync,
         "cleanup": cmd_cleanup,
@@ -357,6 +378,7 @@ def cmd_run_all(args, config: Config):
         ("Correction", lambda: cmd_correction(args, config)),
         ("User Match", lambda: cmd_user_match(args, config)),
         ("Snipe-to-Jamf", lambda: cmd_snipe_to_jamf(args, config)),
+        ("Rehire Detection", lambda: cmd_rehire_detection(args, config)),
         ("Leavers", lambda: cmd_leavers(args, config)),
     ]
     
@@ -646,6 +668,12 @@ Examples:
     leavers_parser.add_argument('--dry-run', '-n', action='store_true',
         help='Simulate actions without making changes')
     
+    # Rehire Detection command
+    rehire_parser = subparsers.add_parser('rehire-detection',
+        help='Restore [Disabled] Snipe-IT users whose Azure AD account is active again')
+    rehire_parser.add_argument('--dry-run', '-n', action='store_true',
+        help='Show what would be done without making changes')
+
     # Snipe-to-Jamf command
     snipe_jamf_parser = subparsers.add_parser('snipe-to-jamf',
         help='Sync user information from Snipe-IT to Jamf Pro')
@@ -793,6 +821,7 @@ Examples:
     # Route to appropriate command handler
     command_handlers = {
         'leavers': cmd_leavers,
+        'rehire-detection': cmd_rehire_detection,
         'snipe-to-jamf': cmd_snipe_to_jamf,
         'user-match': cmd_user_match,
         'model-sync': cmd_model_sync,

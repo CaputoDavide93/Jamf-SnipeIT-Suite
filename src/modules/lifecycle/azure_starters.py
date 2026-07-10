@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 from core.config import Config
 from clients.azure import AzureClient
 from clients.snipeit import SnipeITClient
+from infra.helpers import leave_date_passed
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,24 @@ class AzureStartersModule:
         logger.debug("Fetching Snipe-IT users")
         snipe_users = self.snipe.get_all_users()
         logger.debug(f"   Found {len(snipe_users)} users in Snipe-IT")
-        
+
+        # Fetch-integrity guard: an empty user list from a production
+        # Snipe-IT means the fetch failed or truncated. Without it every
+        # starter would fall into _create_new_user and fire duplicate POSTs.
+        if azure_users and not snipe_users:
+            logger.error(
+                "Snipe-IT returned 0 users — aborting to avoid creating "
+                "duplicates for every starter (fetch likely failed)"
+            )
+            return {
+                "total_azure_users": len(azure_users),
+                "users_created": 0,
+                "users_updated": 0,
+                "already_exists": 0,
+                "skipped": 0,
+                "errors": ["Snipe-IT user fetch returned 0 users — aborted"],
+            }
+
         # Build email lookup map for Snipe-IT users
         snipe_users_by_email = {}
         for user in snipe_users:
@@ -134,6 +152,7 @@ class AzureStartersModule:
             "users_updated": 0,
             "already_exists": 0,
             "skipped": 0,
+            "skipped_former_employees": 0,
             "errors": [],
             "created_users": [],
             "updated_users": [],
@@ -148,6 +167,18 @@ class AzureStartersModule:
         
         return results
     
+    @staticmethod
+    def _is_former_employee(azure_user: Dict[str, Any]) -> bool:
+        """True only when employeeLeaveDateTime has passed — a definite leaver.
+
+        Deliberately does NOT skip on accountEnabled=false: new hires are
+        routinely pre-provisioned with disabled accounts before day one, and
+        this weekly job must still create their Snipe-IT record in advance.
+        A missing/null accountEnabled (e.g. Graph permission gap) must never
+        silently skip the whole starters group either.
+        """
+        return leave_date_passed(azure_user, default_on_invalid=False)
+
     def _process_single_user(
         self,
         azure_user: Dict[str, Any],
@@ -166,6 +197,18 @@ class AzureStartersModule:
         if not email:
             logger.debug(f"Skipping user without email: {azure_user.get('id')}")
             results["skipped"] += 1
+            return
+
+        # Skip former staff whose leave date has already passed — the starters
+        # group is not always cleaned up. Logged at INFO with a dedicated
+        # counter so a silent headcount drop is visible in the summary.
+        if self._is_former_employee(azure_user):
+            logger.info(
+                f"Skipping former employee (leave date passed): "
+                f"{azure_user.get('displayName')} ({email})"
+            )
+            results["skipped"] += 1
+            results["skipped_former_employees"] += 1
             return
         
         email_lower = email.lower().strip()
@@ -328,7 +371,8 @@ class AzureStartersModule:
             f"{results['users_created']} created, "
             f"{results['users_updated']} updated, "
             f"{results['already_exists']} existing, "
-            f"{results['skipped']} skipped, "
+            f"{results['skipped']} skipped "
+            f"({results.get('skipped_former_employees', 0)} former employees), "
             f"{len(results['errors'])} errors"
         )
         

@@ -12,7 +12,7 @@ from clients.snipeit import SnipeITClient
 from clients.slack import SlackClient
 from infra.audit_csv import AuditCSV
 from infra.progress import ProgressTracker
-from infra.helpers import setup_logging, rate_limit_delay
+from infra.helpers import setup_logging, rate_limit_delay, leave_date_passed
 
 logger = logging.getLogger(__name__)
 
@@ -286,22 +286,12 @@ class LeaversModule:
         """Tag [Disabled] only if truly inactive:
         - accountEnabled == false, OR
         - employeeLeaveDateTime <= now (leave date passed)
+
+        Unparseable leave dates fail safe to False (don't tag).
         """
         if not azure_user.get("accountEnabled", True):
             return True
-        leave = azure_user.get("employeeLeaveDateTime")
-        if leave:
-            try:
-                from datetime import datetime, timezone
-                # Azure returns ISO 8601 with Z or offset
-                leave_str = leave.replace("Z", "+00:00") if isinstance(leave, str) else str(leave)
-                leave_dt = datetime.fromisoformat(leave_str)
-                if leave_dt.tzinfo is None:
-                    leave_dt = leave_dt.replace(tzinfo=timezone.utc)
-                return leave_dt <= datetime.now(timezone.utc)
-            except (ValueError, TypeError):
-                return False
-        return False
+        return leave_date_passed(azure_user, default_on_invalid=False)
 
     def _update_user_name_disabled(
         self,

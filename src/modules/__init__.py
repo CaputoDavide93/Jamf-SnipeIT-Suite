@@ -15,6 +15,7 @@ from .sync import (
 from .lifecycle import (
     AzureStartersModule, run_azure_starters,
     LeaversModule, run_leavers,
+    RehireDetectionModule, run_rehire_detection,
     UserEnrichmentModule,
 )
 
@@ -36,6 +37,7 @@ __all__ = [
     # Lifecycle
     "AzureStartersModule", "run_azure_starters",
     "LeaversModule", "run_leavers",
+    "RehireDetectionModule", "run_rehire_detection",
     "UserEnrichmentModule",
     # Maintenance
     "WakeUpModule", "run_wakeup_group", "run_wakeup_serial", "run_wakeup_file",

@@ -93,6 +93,16 @@ modules:
     interval_days: 7
     lookback_days: 15
 
+  # Rehire Detection: restores [Disabled] users whose AAD account is
+  # active again (strips prefix, restores Pending assets to Deployed)
+  rehire_detection:
+    enabled: true
+    # SAFETY LATCH: config dry_run can only force dry-run ON, never off
+    dry_run: true
+    # Require HiBob (HR source of truth, read-only) to confirm the person
+    # is an active employee before auto-restoring
+    hibob_confirmation: true
+
   # User Match module settings
   user_match:
     enabled: true
@@ -137,6 +147,10 @@ scheduler:
       enabled: false
     model_sync:
       cron: "45 16 * * 2"   # Tuesday 16:45 PM
+      enabled: false
+    # Rehire Detection must run BEFORE correction/user_match/leavers
+    rehire_detection:
+      cron: "30 17 * * 2"  # Tuesday 17:30 PM
       enabled: false
     correction:
       cron: "5 17 * * 2"  # Tuesday 17:05 PM

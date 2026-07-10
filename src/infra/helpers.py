@@ -5,13 +5,48 @@ Logging setup, countdown, rate-limit delay, log cleanup, HTTP retry.
 import csv
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Azure AD helpers
+# =============================================================================
+
+def leave_date_passed(azure_user: Dict[str, Any], default_on_invalid: bool = False) -> bool:
+    """
+    True if the Azure AD user's employeeLeaveDateTime exists and is in the past.
+
+    Single source of truth for leave-date parsing so Leavers, Starters and
+    Rehire Detection cannot drift apart (Azure returns ISO 8601 with Z or
+    offset; naive values are treated as UTC).
+
+    Args:
+        azure_user: Azure AD user dictionary
+        default_on_invalid: Returned when the date exists but cannot be
+            parsed. Each caller picks its fail-safe direction:
+            - Leavers/Starters use False (don't tag / don't skip creation)
+            - Rehire Detection uses True (don't auto-restore)
+
+    Returns:
+        True if leave date has passed, False if absent or in the future
+    """
+    leave = azure_user.get("employeeLeaveDateTime")
+    if not leave:
+        return False
+    try:
+        leave_str = leave.replace("Z", "+00:00") if isinstance(leave, str) else str(leave)
+        leave_dt = datetime.fromisoformat(leave_str)
+        if leave_dt.tzinfo is None:
+            leave_dt = leave_dt.replace(tzinfo=timezone.utc)
+        return leave_dt <= datetime.now(timezone.utc)
+    except (ValueError, TypeError):
+        return default_on_invalid
 
 
 # =============================================================================

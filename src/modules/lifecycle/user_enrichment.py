@@ -14,6 +14,12 @@ from clients.snipeit import SnipeITClient
 
 logger = logging.getLogger(__name__)
 
+# Marker appended to a Snipe-IT user's notes when Azure AD says they are a
+# contractor. Snipe-IT's department field holds squad names (Plutonium,
+# Krypton, ...) so it cannot carry the contractor flag — notes are the only
+# non-destructive place for it.
+CONTRACTOR_MARKER = "Contractor (Azure AD)"
+
 
 class UserEnrichmentModule:
     """Enrich Snipe-IT users with Azure AD data (department, company, jobtitle)."""
@@ -22,6 +28,8 @@ class UserEnrichmentModule:
         self.config = config
         self.settings = config.modules.get("user_enrichment", {})
         self.batch_delay = self.settings.get("batch_delay_seconds", 0.2)
+        # Off by default — enabled explicitly via modules.user_enrichment.mark_contractors
+        self.mark_contractors = bool(self.settings.get("mark_contractors", False))
 
         self.azure = AzureClient(
             tenant_id=config.azure.tenant_id,
@@ -56,6 +64,7 @@ class UserEnrichmentModule:
             "already_complete": 0,
             "no_azure_match": 0,
             "skipped_disabled": 0,
+            "contractors_marked": 0,
             "errors": 0,
         }
 
@@ -77,6 +86,15 @@ class UserEnrichmentModule:
             if gid:
                 extra = self.azure.get_group_members(gid)
                 azure_users_raw.extend(extra)
+
+        # Contractors are often in none of the groups above — when contractor
+        # marking is on, index ALL enabled AAD users so their department is
+        # visible. Prepend so group entries (richer fields) win on collision.
+        if self.mark_contractors:
+            try:
+                azure_users_raw = self.azure.get_all_active_users() + azure_users_raw
+            except Exception as e:
+                logger.warning(f"Could not fetch all active AAD users for contractor marking: {e}")
 
         # Build Azure lookup by email
         azure_by_email: Dict[str, Dict] = {}
@@ -132,6 +150,18 @@ class UserEnrichmentModule:
             # We'd need to look up or create the department; for now, just job title
             # Department and company enrichment is done by field update in jobtitle
 
+            # Contractor visibility: Azure AD department == "Contractor" is the
+            # only signal that a person is a contractor. Persist it as a notes
+            # marker (append-only, never overwrites existing notes).
+            marked_contractor = False
+            if self.mark_contractors and az_department.lower() == "contractor":
+                sn_notes = html.unescape((su.get("notes") or "").strip())
+                if CONTRACTOR_MARKER.lower() not in sn_notes.lower():
+                    update_payload["notes"] = (
+                        f"{sn_notes}\n{CONTRACTOR_MARKER}" if sn_notes else CONTRACTOR_MARKER
+                    )
+                    marked_contractor = True
+
             if not update_payload:
                 results["already_complete"] += 1
                 continue
@@ -142,11 +172,15 @@ class UserEnrichmentModule:
                     f"  [{i}] {name}: would enrich: {update_payload}"
                 )
                 results["enriched"] += 1
+                if marked_contractor:
+                    results["contractors_marked"] += 1
             else:
                 try:
                     ok = self.snipe.update_user(uid, update_payload)
                     if ok:
                         results["enriched"] += 1
+                        if marked_contractor:
+                            results["contractors_marked"] += 1
                         logger.debug(f"  [{i}] {name}: enriched with {update_payload}")
                     else:
                         results["errors"] += 1
@@ -166,6 +200,7 @@ class UserEnrichmentModule:
             f"User Enrichment ({mode}): "
             f"{results['total_users']} total, "
             f"{results['enriched']} enriched, "
+            f"{results.get('contractors_marked', 0)} contractors marked, "
             f"{results['already_complete']} complete, "
             f"{results['no_azure_match']} no match, "
             f"{results['skipped_disabled']} disabled, "

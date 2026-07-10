@@ -272,17 +272,27 @@ class AzureClient:
         logger.debug(f"Retrieved {len(users)} disabled users")
         return users
     
-    def get_all_active_users(self) -> List[Dict[str, Any]]:
+    def get_all_active_users(self, include_leave_date: bool = False) -> List[Dict[str, Any]]:
         """
         Fetch ALL active users from Azure AD (not just a specific group).
         Returns displayName, mail, userPrincipalName, jobTitle, department.
+
+        Args:
+            include_leave_date: Also select employeeLeaveDateTime (needed by
+                Rehire Detection). Off by default so callers that don't need
+                it are unaffected if the Graph app ever loses the
+                User-LifeCycleInfo read permission.
         """
         logger.debug("Fetching all active Azure AD users...")
+
+        select = "id,displayName,mail,userPrincipalName,jobTitle,department,accountEnabled,givenName,surname"
+        if include_leave_date:
+            select += ",employeeLeaveDateTime"
 
         base_url = "https://graph.microsoft.com/v1.0/users"
         params = {
             "$filter": "accountEnabled eq true",
-            "$select": "id,displayName,mail,userPrincipalName,jobTitle,department,accountEnabled,givenName,surname",
+            "$select": select,
             "$top": "999",
         }
 

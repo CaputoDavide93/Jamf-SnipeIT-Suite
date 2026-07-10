@@ -310,16 +310,31 @@ class SnipeITClient:
     def update_user(self, user_id: int, data: Dict[str, Any]) -> bool:
         """
         Update user information.
-        
+
         Args:
             user_id: Snipe-IT user ID
             data: Fields to update
-        
+
         Returns:
             True if successful
         """
         response = self._request("PATCH", f"/users/{user_id}", json_data=data)
-        return response is not None and response.status_code in (200, 201)
+        if response is None or response.status_code not in (200, 201):
+            return False
+        # Snipe-IT returns HTTP 200 with {"status": "error"} on validation
+        # failures — check the JSON body like create_user does, otherwise
+        # callers count silent failures as successes.
+        try:
+            result = response.json()
+        except ValueError:
+            return True
+        if isinstance(result, dict) and result.get("status") == "error":
+            logger.warning(
+                f"update_user {user_id} returned HTTP {response.status_code} "
+                f"but status=error: {result.get('messages', '')}"
+            )
+            return False
+        return True
     
     def create_user(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

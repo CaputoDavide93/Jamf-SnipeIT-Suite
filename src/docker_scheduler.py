@@ -48,6 +48,7 @@ from modules.sync import (
 from modules.lifecycle import (
     AzureStartersModule,
     LeaversModule,
+    RehireDetectionModule,
     UserEnrichmentModule,
 )
 from modules.maintenance import (
@@ -227,9 +228,37 @@ def run_module_safe(name: str, runner_fn, dry_run: bool = False,
         return {'success': False, 'error': str(e), 'results': None}
 
 
+def run_scheduled(name: str, runner_fn, dry_run: bool = False) -> Dict:
+    """Wrapper for cron-triggered jobs: serialize via RunMutex.
+
+    Individual scheduled jobs previously ran without the mutex, so a slow
+    module could overlap the next cron slot (or the startup full run) and
+    they would revert each other's checkin/checkout work. Skipped runs are
+    reported rather than queued — the next cron firing picks the work up.
+    """
+    from infra.mutex import RunMutex
+    mutex = RunMutex()
+    if not mutex.acquire():
+        logger.warning(f"--- {name} SKIPPED: another run holds the mutex ---")
+        return {'success': False, 'error': 'mutex_held', 'results': None}
+    try:
+        return run_module_safe(name, runner_fn, dry_run=dry_run)
+    finally:
+        mutex.release()
+
+
 def run_leavers(dry_run: bool = False) -> Dict:
     """Run Leavers module."""
     module = LeaversModule(config)
+    try:
+        return module.run(dry_run=dry_run)
+    finally:
+        module.close()
+
+
+def run_rehire_detection(dry_run: bool = False) -> Dict:
+    """Run Rehire Detection module — restore [Disabled] users active again in AAD."""
+    module = RehireDetectionModule(config)
     try:
         return module.run(dry_run=dry_run)
     finally:
@@ -361,51 +390,59 @@ def run_all_modules_startup(dry_run: bool = False):
         logger.error("Another run already in progress — aborting")
         return {"aborted": True, "reason": "mutex_held"}
 
-    # Pre-flight connectivity check
-    pre_flight_check()
+    try:
+        # Pre-flight connectivity check
+        pre_flight_check()
 
-    ctx = RunContext()
+        ctx = RunContext()
 
-    modules = [
-        ("Azure Starters", run_azure_starters),
-        ("User Enrichment", run_user_enrichment),
-        ("Model Sync", run_model_sync),
-        ("Correction", run_correction),
-        ("User Match", run_user_match),
-        ("Snipe-to-Jamf", run_snipe_to_jamf),
-        ("Leavers", run_leavers),
-        ("Peripherals Sync", run_peripherals_sync),
-    ]
+        # Rehire Detection runs right after provisioning and BEFORE the
+        # sync chain: re-hired users must be un-ghosted before Correction,
+        # User Match, and Leavers evaluate them.
+        modules = [
+            ("Azure Starters", run_azure_starters),
+            ("User Enrichment", run_user_enrichment),
+            ("Rehire Detection", run_rehire_detection),
+            ("Model Sync", run_model_sync),
+            ("Correction", run_correction),
+            ("User Match", run_user_match),
+            ("Snipe-to-Jamf", run_snipe_to_jamf),
+            ("Leavers", run_leavers),
+            ("Peripherals Sync", run_peripherals_sync),
+        ]
 
-    results = {}
-    for name, runner in modules:
-        results[name] = run_module_safe(name, runner, dry_run=dry_run, ctx=ctx)
-        time.sleep(2)  # Small delay between modules
+        results = {}
+        for name, runner in modules:
+            results[name] = run_module_safe(name, runner, dry_run=dry_run, ctx=ctx)
+            time.sleep(2)  # Small delay between modules
 
-    # Summary
-    success_count = sum(1 for r in results.values() if r['success'])
-    fail_count = len(results) - success_count
+        # Summary
+        success_count = sum(1 for r in results.values() if r['success'])
+        fail_count = len(results) - success_count
 
-    logger.info("=== RUN SUMMARY: %d succeeded, %d failed ===", success_count, fail_count)
+        logger.info("=== RUN SUMMARY: %d succeeded, %d failed ===", success_count, fail_count)
 
-    for name, result in results.items():
-        status = "OK" if result['success'] else "FAILED"
-        logger.info(f"  {name}: {status}")
+        for name, result in results.items():
+            status = "OK" if result['success'] else "FAILED"
+            logger.info(f"  {name}: {status}")
 
-    summary = ctx.summary()
-    if summary and summary.get("modules"):
-        for mod_name, mod_data in summary["modules"].items():
-            dur = mod_data.get("duration_s", 0)
-            processed = mod_data.get("processed", 0)
-            if dur > 0 or processed > 0:
-                logger.info(f"  {mod_name}: {dur:.0f}s, {processed} items")
+        summary = ctx.summary()
+        if summary and summary.get("modules"):
+            for mod_name, mod_data in summary["modules"].items():
+                dur = mod_data.get("duration_s", 0)
+                processed = mod_data.get("processed", 0)
+                if dur > 0 or processed > 0:
+                    logger.info(f"  {mod_name}: {dur:.0f}s, {processed} items")
 
-    # Slack run summary
-    if slack and config.slack.notify_module_summary:
-        slack.notify_run_summary(summary)
+        # Slack run summary
+        if slack and config.slack.notify_module_summary:
+            slack.notify_run_summary(summary)
 
-    mutex.release()
-    return results
+        return results
+    finally:
+        # Always release — an exception in summary/Slack must not leave the
+        # lock held for the full TTL.
+        mutex.release()
 
 
 def get_next_run_times() -> List[Dict]:
@@ -479,11 +516,13 @@ def on_demand_menu():
     print("  16. User Enrichment (DRY RUN)")
     print("  17. AI Cross-Platform Audit")
     print("  18. AI Cross-Platform Audit (DRY RUN)")
+    print("  19. Rehire Detection - Restore [Disabled] users active again in AAD")
+    print("  20. Rehire Detection (DRY RUN)")
     print("  0.  Cancel - Return to scheduler")
     print("="*60)
 
     try:
-        choice = input("\n  Enter your choice (0-18): ").strip()
+        choice = input("\n  Enter your choice (0-20): ").strip()
     except EOFError:
         return
     
@@ -530,6 +569,10 @@ def on_demand_menu():
         run_module_safe("AI Audit", run_ai_audit, dry_run)
     elif choice == '18':
         run_module_safe("AI Audit (DRY)", run_ai_audit, dry_run=True)
+    elif choice == '19':
+        run_module_safe("Rehire Detection", run_rehire_detection, dry_run)
+    elif choice == '20':
+        run_module_safe("Rehire Detection (DRY)", run_rehire_detection, dry_run=True)
     else:
         print("  Invalid choice.")
     
@@ -589,10 +632,23 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     jitter = int(cfg.scheduler.get('jitter_seconds', 120))  # spreads starts to avoid collisions
     
     # Add Leavers job
+    # Rehire Detection MUST be scheduled before Leavers (Tuesday chain)
+    # so returning employees are un-tagged before Leavers re-evaluates.
+    if jobs_config.get('rehire_detection', {}).get('enabled', False):
+        cron = jobs_config['rehire_detection'].get('cron', '35 18 * * 2')
+        scheduler.add_job(
+            lambda: run_scheduled("Rehire Detection", run_rehire_detection),
+            CronTrigger.from_crontab(cron),
+            id='rehire_detection',
+            name='Rehire Detection',
+            jitter=jitter,
+        )
+        logger.info(f"  Rehire Detection: {cron}")
+
     if jobs_config.get('leavers', {}).get('enabled', False):
         cron = jobs_config['leavers'].get('cron', '0 9 * * 1')
         scheduler.add_job(
-            lambda: run_module_safe("Leavers", run_leavers),
+            lambda: run_scheduled("Leavers", run_leavers),
             CronTrigger.from_crontab(cron),
             id='leavers',
             name='Leavers Module',
@@ -604,7 +660,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('snipe_to_jamf', {}).get('enabled', False):
         cron = jobs_config['snipe_to_jamf'].get('cron', '0 6 * * *')
         scheduler.add_job(
-            lambda: run_module_safe("Snipe-to-Jamf", run_snipe_to_jamf),
+            lambda: run_scheduled("Snipe-to-Jamf", run_snipe_to_jamf),
             CronTrigger.from_crontab(cron),
             id='snipe_to_jamf',
             name='Snipe-to-Jamf Sync',
@@ -616,7 +672,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('user_match', {}).get('enabled', False):
         cron = jobs_config['user_match'].get('cron', '0 9 * * 2')
         scheduler.add_job(
-            lambda: run_module_safe("User Match", run_user_match),
+            lambda: run_scheduled("User Match", run_user_match),
             CronTrigger.from_crontab(cron),
             id='user_match',
             name='User Match Module',
@@ -628,7 +684,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('model_sync', {}).get('enabled', False):
         cron = jobs_config['model_sync'].get('cron', '0 2 * * 0')
         scheduler.add_job(
-            lambda: run_module_safe("Model Sync", run_model_sync),
+            lambda: run_scheduled("Model Sync", run_model_sync),
             CronTrigger.from_crontab(cron),
             id='model_sync',
             name='Model Sync Module',
@@ -640,7 +696,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('azure_starters', {}).get('enabled', False):
         cron = jobs_config['azure_starters'].get('cron', '0 6 * * 1')
         scheduler.add_job(
-            lambda: run_module_safe("Azure Starters", run_azure_starters),
+            lambda: run_scheduled("Azure Starters", run_azure_starters),
             CronTrigger.from_crontab(cron),
             id='azure_starters',
             name='Azure Starters Module',
@@ -652,7 +708,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('correction', {}).get('enabled', False):
         cron = jobs_config['correction'].get('cron', '0 8 * * *')
         scheduler.add_job(
-            lambda: run_module_safe("Correction", run_correction),
+            lambda: run_scheduled("Correction", run_correction),
             CronTrigger.from_crontab(cron),
             id='correction',
             name='Self-Healing Correction',
@@ -664,7 +720,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('cleanup', {}).get('enabled', False):
         cron = jobs_config['cleanup'].get('cron', '0 3 * * 0')
         scheduler.add_job(
-            lambda: run_module_safe("Cleanup", run_cleanup),
+            lambda: run_scheduled("Cleanup", run_cleanup),
             CronTrigger.from_crontab(cron),
             id='cleanup',
             name='Cleanup & Duplicate Detection',
@@ -676,7 +732,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('user_enrichment', {}).get('enabled', False):
         cron = jobs_config['user_enrichment'].get('cron', '30 6 * * 1')
         scheduler.add_job(
-            lambda: run_module_safe("User Enrichment", run_user_enrichment),
+            lambda: run_scheduled("User Enrichment", run_user_enrichment),
             CronTrigger.from_crontab(cron),
             id='user_enrichment',
             name='User Enrichment Module',
@@ -688,7 +744,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('peripherals_sync', {}).get('enabled', False):
         cron = jobs_config['peripherals_sync'].get('cron', '0 8 * * 1')
         scheduler.add_job(
-            lambda: run_module_safe("Peripherals Sync", run_peripherals_sync),
+            lambda: run_scheduled("Peripherals Sync", run_peripherals_sync),
             CronTrigger.from_crontab(cron),
             id='peripherals_sync',
             name='Peripherals Sync (HiBob)',
@@ -700,7 +756,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('ai_audit', {}).get('enabled', False):
         cron = jobs_config['ai_audit'].get('cron', '0 4 * * 0')
         scheduler.add_job(
-            lambda: run_module_safe("AI Audit", run_ai_audit),
+            lambda: run_scheduled("AI Audit", run_ai_audit),
             CronTrigger.from_crontab(cron),
             id='ai_audit',
             name='AI Cross-Platform Audit',
@@ -712,7 +768,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('health_check', {}).get('enabled', False):
         cron = jobs_config['health_check'].get('cron', '0 9 * * *')
         scheduler.add_job(
-            lambda: run_module_safe("Health Check", run_health_check),
+            lambda: run_scheduled("Health Check", run_health_check),
             CronTrigger.from_crontab(cron),
             id='health_check',
             name='Health Check',
