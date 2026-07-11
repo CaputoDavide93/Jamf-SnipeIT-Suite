@@ -334,4 +334,4 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the suite on ev
 
 ---
 
-<p align="center">Built and maintained by <strong>Davide Caputo</strong> · CreateFuture TechOps</p>
+<p align="center">Made with ❤️ by <strong><a href="https://github.com/CaputoDavide93">Davide Caputo</a></strong></p>
