@@ -1,13 +1,16 @@
+<div align="center">
+
 # 🔄 Jamf-SnipeIT Suite
 
-**Enterprise asset-lifecycle automation** — continuous, unattended synchronisation of devices, users, and accessories between **Jamf Pro**, **Snipe-IT**, **Azure AD / Microsoft Entra ID**, and **HiBob**, running serverless on AWS Fargate.
+**Unattended asset-lifecycle automation across Jamf Pro, Snipe-IT, Azure AD / Entra ID, and HiBob — serverless on AWS Fargate**
 
-![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg?logo=python&logoColor=white)
-![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg?logo=docker&logoColor=white)
-![AWS Fargate](https://img.shields.io/badge/AWS-Fargate-FF9900.svg?logo=amazonwebservices&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-39%20passing-brightgreen.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Platform](https://img.shields.io/badge/platform-linux%2Famd64-lightgrey.svg)
+![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
+![AWS Fargate](https://img.shields.io/badge/AWS-Fargate-FF9900?logo=amazonwebservices&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
+[![CI](https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite/actions/workflows/ci.yml/badge.svg)](https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite/actions/workflows/ci.yml)
+
+</div>
 
 ---
 
@@ -59,40 +62,25 @@ This suite closes the loop automatically:
 
 ## 🏗 Architecture
 
-```text
-                    ┌──────────────────────────────────────────────┐
-                    │                AWS (eu-west-1)               │
-                    │                                              │
-   EventBridge ──▶  │  ECS Fargate task (linux/amd64)              │
-   4 cron rules     │  ┌────────────────────────────────────────┐  │
-                    │  │            docker_scheduler            │  │
-                    │  │  RunMutex (SSM) ─ serialised modules   │  │
-                    │  └──────┬─────────────────┬───────────────┘  │
-                    │         │                 │                  │
-                    │   SSM Parameter Store   ECR image            │
-                    │   (secrets)             (:latest)            │
-                    └─────────┼─────────────────┼──────────────────┘
-                              ▼                 ▼
-      ┌──────────┐   ┌──────────────┐   ┌──────────────┐   ┌───────────┐
-      │ Jamf Pro │◀─▶│   Snipe-IT   │◀─▶│  Azure AD /  │   │   HiBob   │
-      │  (MDM)   │   │ (asset reg.) │   │   Entra ID   │   │ (HR, R/O) │
-      └──────────┘   └──────────────┘   └──────────────┘   └───────────┘
-```
+```mermaid
+flowchart LR
+    EB["⏰ EventBridge<br>4 cron rules"]
 
-**Layered codebase:**
+    subgraph AWS["☁️ AWS (eu-west-1)"]
+        direction TB
+        TASK["🐳 ECS Fargate task (linux/amd64)<br>docker_scheduler — RunMutex-serialised modules"]
+        SSM["🔐 SSM Parameter Store<br>(secrets + mutex)"]
+        ECR["📦 ECR image (:latest)"]
+        TASK --> SSM
+        ECR --> TASK
+    end
 
-```text
-src/
-├── clients/      # Thin, retrying API clients (jamf, snipeit, azure, hibob, slack)
-├── core/         # Config schema, client factory, run context, sync state
-├── matching/     # UserMatcher scoring engine + AI resolver
-├── infra/        # RunMutex, health server, shared helpers
-├── modules/
-│   ├── lifecycle/     # azure_starters, user_enrichment, rehire_detection, leavers
-│   ├── sync/          # user_match, snipe_to_jamf, model_sync, correction, peripherals_sync
-│   └── maintenance/   # cleanup, reconciliation, username_standardize, ai_audit, health_check
-├── main.py            # CLI entry point (interactive menu + subcommands)
-└── docker_scheduler.py# Container entry point (APScheduler + health endpoint)
+    EB --> TASK
+
+    TASK <--> JAMF["🖥️ Jamf Pro (MDM)"]
+    TASK <--> SNIPE["📦 Snipe-IT (asset register)"]
+    TASK <--> AAD["🔑 Azure AD / Entra ID"]
+    TASK -. read-only .-> HIBOB["👥 HiBob (HR truth)"]
 ```
 
 ## 🧩 Modules
@@ -127,23 +115,54 @@ src/
 | `health-check` | 🩺 | Scans for stuck states (assets pending too long, users disabled with assets, orphan checkouts) and alerts. |
 | `wakeup` | ⏰ | Manual-only: sends wake commands to a Jamf smart group before big syncs. |
 
+### One-off scripts
+
+| Script | What it does |
+|--------|--------------|
+| `src/scripts/import_shipment_history.py` | One-off bulk import of a supplier shipment CSV into Snipe-IT accessories: normalises messy device descriptions to canonical accessory names (laptops are skipped — they arrive via `user-match`), matches recipients to Snipe-IT users (exact → known-correction → fuzzy), creates missing accessories, and checks them out in rate-limited batches. Dry-run by default; `--execute` to apply, `--analyze-only` to inspect the CSV offline. Run from `src/`: `python -m scripts.import_shipment_history <csv> --dry-run`. |
+
+### CLI command inventory
+
+<!-- AUTOGEN:modules -->
+_20 CLI commands, generated from `src/main.py` by `tools/gen_modules_doc.py` — do not edit by hand._
+
+| Command | What it does | Scheduler default (cron) |
+|---------|--------------|---------------------------|
+| `leavers` | Mark assets of disabled Azure AD users as pending | `0 9 * * 1` |
+| `rehire-detection` | Restore [Disabled] Snipe-IT users whose Azure AD account is active again | `35 18 * * 2` |
+| `snipe-to-jamf` | Sync user information from Snipe-IT to Jamf Pro | `0 6 * * *` |
+| `user-match` | Match Jamf computers to Snipe-IT users and provision assets | `0 9 * * 2` |
+| `model-sync` | Sync hardware models between Jamf Pro and Snipe-IT | `0 2 * * 0` |
+| `wakeup` | Send MDM redeploy commands to devices | — |
+| `all` | Run all modules in sequence (except WakeUp) | — |
+| `reconcile` | Reconcile inventory between Jamf Pro and Snipe-IT | — |
+| `azure-starters` | Sync Azure AD starters group members to Snipe-IT users | `0 6 * * 1` |
+| `correction` | Detect and fix wrong asset assignments from previous runs | `0 8 * * *` |
+| `health-check` | Scan for stuck/inconsistent states and report to Slack | `0 9 * * *` |
+| `ai-audit` | AI-powered cross-platform audit (security, compliance, anomalies) | `0 4 * * 0` |
+| `cleanup` | Merge duplicate users and remove junk accounts | `0 3 * * 0` |
+| `user-enrichment` | Push Azure AD fields (job title, dept) to Snipe-IT | `30 6 * * 1` |
+| `peripherals-sync` | Sync HiBob equipment to Snipe-IT accessories | `0 8 * * 1` |
+| `username-standardize` | Strip @domain from Snipe-IT usernames | — |
+| `run-group` | Run a comma-separated list of modules sequentially under mutex | — |
+| `health-server` | Start health check HTTP server | — |
+| `reconciliation` | Reachable via `run-group` only | — |
+| `monthly-digest` | Reachable via `run-group` only | — |
+<!-- /AUTOGEN:modules -->
+
+> The **Scheduler default** column is the built-in cron each job falls back to in the container scheduler (`src/docker_scheduler.py`) — `config.yaml` `jobs:` entries override it, and production timing is ultimately set by the EventBridge rules in `terraform/`.
+
 ## 🔄 The User Lifecycle Model
 
 The suite models the full employee journey, including the awkward paths most tooling ignores:
 
-```text
-                   ┌────────────┐
-      new hire ──▶ │   ACTIVE   │ ◀────────────────────┐
-                   └─────┬──────┘                      │
-                         │ leaves (AAD leavers group)  │ re-hired / contract→perm
-                         ▼                             │
-                   ┌────────────┐   4-signal check   ┌─┴──────────────┐
-                   │ [Disabled] │ ─────────────────▶ │ REHIRE-RESTORE │
-                   │ assets ⏸   │                    │ name un-tagged │
-                   └─────┬──────┘                    │ assets ▶ live  │
-                         │ stays gone                └────────────────┘
-                         ▼
-                   (kept for audit — never deleted)
+```mermaid
+flowchart TB
+    HIRE(["🌱 New hire"]) --> ACTIVE["✅ ACTIVE"]
+    ACTIVE -- "leaves (AAD leavers group)" --> DISABLED["🚪 [Disabled]<br>assets ⏸ Pending"]
+    DISABLED -- "4-signal check passes" --> RESTORE["♻️ REHIRE-RESTORE<br>name un-tagged, assets ▶ live"]
+    RESTORE -- "re-hired / contract→perm" --> ACTIVE
+    DISABLED -- "stays gone" --> AUDIT(["🗄️ Kept for audit — never deleted"])
 ```
 
 A `[Disabled]` user is **automatically restored** only when **four independent signals agree**:
@@ -258,7 +277,7 @@ docker build --platform linux/amd64 \
 docker push <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-prod:latest
 ```
 
-> ⚠️ **Config changes ≠ code changes.** Fargate never reads `config.yaml` — non-secret settings live in the **task-definition environment**. To change one: register a new task-def revision, then repoint all four EventBridge rule targets to it. See `OPERATIONS.md`.
+> ⚠️ **Config changes ≠ code changes.** Fargate never reads `config.yaml` — non-secret settings live in the **task-definition environment**. To change one: register a new task-def revision, then repoint all four EventBridge rule targets to it. See [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## 🛡 Safety Model
 
@@ -272,17 +291,45 @@ docker push <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-
 | ⏸️ *Pending*, never delete | Any destructive action on leaver data |
 | 📴 HiBob strictly read-only | Any write ever reaching the HR source of truth |
 
+## 📁 Repo Structure
+
+```text
+Jamf-SnipeIT-Suite/
+├── src/
+│   ├── clients/            # 🔌 Thin, retrying API clients (jamf, snipeit, azure, hibob, slack)
+│   ├── core/               # ⚙️ Config schema, client factory, run context, sync state
+│   ├── matching/           # 🧠 UserMatcher scoring engine + AI resolver
+│   ├── infra/              # 🧱 RunMutex, health server, audit CSV, shared helpers
+│   ├── modules/
+│   │   ├── lifecycle/      # 🌱 azure_starters, user_enrichment, rehire_detection, leavers
+│   │   ├── sync/           # 🔁 user_match, snipe_to_jamf, model_sync, correction, peripherals_sync
+│   │   └── maintenance/    # 🧹 cleanup, reconciliation, username_standardize, ai_audit, health_check, monthly_digest
+│   ├── scripts/            # 🧾 One-off imports (shipment history)
+│   ├── main.py             # 🎛️ CLI entry point (interactive menu + subcommands)
+│   └── docker_scheduler.py # ⏰ Container entry point (APScheduler + health endpoint)
+├── config/                 # 📝 config.yaml.example + equipment mapping
+├── terraform/              # ☁️ AWS infra (ECS, ECR, EventBridge, SSM, IAM)
+├── tests/                  # 🧪 pytest suite
+├── tools/                  # 🤖 gen_modules_doc.py (README inventory generator)
+├── docs/                   # 📚 OPERATIONS.md runbook
+└── scripts/                # 🚀 deploy.sh
+```
+
+---
+
 ## 🧪 Testing
 
 ```bash
-pytest tests/ -v        # 39 tests: matcher scoring, lifecycle classification,
-                        # rehire signals, starters guards, helpers
+pytest tests/ -v        # matcher scoring, lifecycle classification,
+                        # rehire signals, starters guards, mutex & health helpers
 ```
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the suite on every push/PR and fails if the generated module inventory is stale (`python tools/gen_modules_doc.py --check`).
 
 ## 📚 Documentation
 
 - 📖 **Full architecture & operations** → [Confluence: Jamf-SnipeIT Suite](https://xsolutions.atlassian.net/wiki/pages/viewpage.action?pageId=4493508620)
-- 🔧 **Runbook** (deploys, schedules, secret rotation, mutex) → [`OPERATIONS.md`](OPERATIONS.md)
+- 🔧 **Runbook** (deploys, schedules, secret rotation, mutex) → [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 - 🤝 **Contributing** → [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 ---
