@@ -62,6 +62,8 @@ resource "aws_ecs_task_definition" "app" {
       { name = "AI_CACHE_S3_BUCKET", value = aws_s3_bucket.ai_cache.id },
       { name = "AI_CACHE_S3_KEY", value = "ai-resolver-cache.json" },
       { name = "MODEL_SYNC_CATEGORY_ID", value = "2" },
+      { name = "REHIRE_DETECTION_DRY_RUN", value = var.rehire_detection_dry_run },
+      { name = "MARK_CONTRACTORS", value = var.mark_contractors },
     ]
 
     # ALL credentials injected from SSM SecureString at runtime

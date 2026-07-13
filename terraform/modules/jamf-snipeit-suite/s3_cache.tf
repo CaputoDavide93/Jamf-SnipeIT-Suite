@@ -56,9 +56,9 @@ resource "aws_iam_role_policy" "ecs_task_s3_cache" {
         "s3:DeleteObject",
       ]
       Resource = "${aws_s3_bucket.ai_cache.arn}/*"
-    }, {
-      Effect = "Allow"
-      Action = ["s3:ListBucket"]
+      }, {
+      Effect   = "Allow"
+      Action   = ["s3:ListBucket"]
       Resource = aws_s3_bucket.ai_cache.arn
     }]
   })

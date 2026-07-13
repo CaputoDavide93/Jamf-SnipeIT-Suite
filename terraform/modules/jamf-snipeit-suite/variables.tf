@@ -109,6 +109,19 @@ variable "azure_starters_group_id" {
   default = ""
 }
 
+# -- Feature flags --
+variable "rehire_detection_dry_run" {
+  type        = string
+  description = "'true' keeps rehire detection in dry-run (safety latch); 'false' lets it apply changes"
+  default     = "false"
+}
+
+variable "mark_contractors" {
+  type        = string
+  description = "'true' appends the 'Contractor (Azure AD)' marker during user enrichment"
+  default     = "true"
+}
+
 # -- Matching --
 variable "matching_email_domain" {
   type    = string
@@ -156,7 +169,7 @@ variable "schedule_expression" {
   type        = string
   description = "EventBridge cron/rate expression for the scheduled run"
   # Default: Tue 17:00 UTC full-sync run
-  default     = "cron(0 17 ? * TUE *)"
+  default = "cron(0 17 ? * TUE *)"
 }
 
 # -- Monitoring --
