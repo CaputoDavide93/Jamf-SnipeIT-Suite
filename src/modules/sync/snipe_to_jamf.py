@@ -142,7 +142,7 @@ class SnipeToJamfModule:
             progress.advance()
             
             # Rate limiting delay
-            if self.update_delay > 0:
+            if not dry_run and self.update_delay > 0:
                 rate_limit_delay(self.update_delay, "Snipe→Jamf", i, len(filtered))
         
         progress.finish(extra=f"updated={results['updated']}, skipped={results['skipped']}, errors={results['errors']}")

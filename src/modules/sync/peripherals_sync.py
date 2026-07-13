@@ -159,7 +159,7 @@ class PeripheralsSyncModule:
 
         needed_names = set(equipment_types.values())
         created_count = 0
-        for sname in sorted(needed_names):
+        for accessory_index, sname in enumerate(sorted(needed_names), 1):
             if sname.lower() in acc_name_to_id:
                 continue
             logger.debug(f"  Creating accessory: {sname}")
@@ -171,6 +171,7 @@ class PeripheralsSyncModule:
                     acc_name_to_id[sname.lower()] = acc["id"]
                     created_count += 1
             else:
+                acc_name_to_id[sname.lower()] = -(1000 + accessory_index)
                 created_count += 1
 
         if created_count:
@@ -186,26 +187,47 @@ class PeripheralsSyncModule:
         # ------ Step 4: Fetch Snipe-IT users + existing checkouts ------
         logger.info("[4/5] Fetching Snipe-IT users and existing checkouts …")
         snipe_users = self.snipe.get_all_users()
-        users_by_email: Dict[str, Dict] = {}
-        users_by_name: Dict[str, Dict] = {}
+        users_by_email_candidates: Dict[str, List[Dict]] = {}
+        users_by_name_candidates: Dict[str, List[Dict]] = {}
 
         for u in snipe_users:
             email = (u.get("email") or "").lower()
             if email:
-                users_by_email[email] = u
+                users_by_email_candidates.setdefault(email, []).append(u)
             full_name = (u.get("name") or "").strip().lower()
             if not full_name:
                 fn = u.get("first_name") or ""
                 ln = u.get("last_name") or ""
                 full_name = f"{fn} {ln}".strip().lower()
             if full_name:
-                # Prefer user with assets (resolve duplicates)
-                prev = users_by_name.get(full_name)
-                if prev:
-                    if (u.get("assets_count", 0) or 0) > (prev.get("assets_count", 0) or 0):
-                        users_by_name[full_name] = u
-                else:
-                    users_by_name[full_name] = u
+                users_by_name_candidates.setdefault(full_name, []).append(u)
+
+        users_by_email = {
+            email: matches[0]
+            for email, matches in users_by_email_candidates.items()
+            if len(matches) == 1
+        }
+        users_by_name = {
+            name: matches[0]
+            for name, matches in users_by_name_candidates.items()
+            if len(matches) == 1
+        }
+        ambiguous_names = sum(
+            1 for matches in users_by_name_candidates.values() if len(matches) > 1
+        )
+        if ambiguous_names:
+            logger.warning(
+                "Ignoring %d ambiguous Snipe-IT name matches; email match required",
+                ambiguous_names,
+            )
+        ambiguous_emails = sum(
+            1 for matches in users_by_email_candidates.values() if len(matches) > 1
+        )
+        if ambiguous_emails:
+            logger.warning(
+                "Ignoring %d duplicate Snipe-IT email matches",
+                ambiguous_emails,
+            )
 
         logger.debug(f"  Snipe-IT users: {len(snipe_users)} (email index: {len(users_by_email)}, name index: {len(users_by_name)})")
 
@@ -245,6 +267,16 @@ class PeripheralsSyncModule:
             if not snipe_user:
                 not_found += 1
                 logger.debug(f"  User not in Snipe-IT: {hibob_name} ({email})")
+                continue
+
+            if str(
+                snipe_user.get("name") or snipe_user.get("first_name") or ""
+            ).startswith("[Disabled]"):
+                not_found += 1
+                logger.warning(
+                    "Skipping accessory assignment to inactive user: %s",
+                    snipe_user.get("name") or hibob_name,
+                )
                 continue
 
             user_id = snipe_user["id"]

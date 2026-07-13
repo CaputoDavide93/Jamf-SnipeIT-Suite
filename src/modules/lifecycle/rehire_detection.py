@@ -97,6 +97,7 @@ class RehireDetectionModule:
             "rehires_detected": 0,
             "names_restored": 0,
             "assets_restored": 0,
+            "asset_restore_failures": 0,
             "ambiguous": [],       # AAD enabled but still in leavers/disabled group
             "rehired_users": [],   # {name, email, snipe_id, assets_restored}
             "errors": [],
@@ -136,15 +137,15 @@ class RehireDetectionModule:
         # this tenant, so a rehire is only auto-restored when HiBob also
         # lists the person as an active employee.
         hibob_active: Optional[Set[str]] = None
+        hibob_unavailable = False
         if self.settings.get("hibob_confirmation", True):
             try:
                 hibob_active = self._load_hibob_active_emails()
             except Exception as e:
-                # Fail SAFE: confirmation was requested but the source of
-                # truth is unreachable — restore nobody this run.
-                logger.error(f"HiBob fetch failed — aborting: {e}")
+                # Continue classification, but never restore without HR confirmation.
+                logger.error(f"HiBob fetch failed — marking all as ambiguous: {e}")
                 results["errors"].append(f"hibob: {e}")
-                return results
+                hibob_unavailable = True
 
         # ---- Classify + restore ---------------------------------------
         for su in tagged:
@@ -152,6 +153,7 @@ class RehireDetectionModule:
                 self._process_tagged_user(
                     su, active_by_email, leaver_ids, disabled_ids, dry_run, results,
                     hibob_active=hibob_active,
+                    hibob_unavailable=hibob_unavailable,
                 )
             except Exception as e:
                 name = su.get("name", su.get("id"))
@@ -202,13 +204,13 @@ class RehireDetectionModule:
         STRICTLY READ-ONLY: only /people/search (a read-only search POST)
         is called — HiBob data is never modified.
 
-        Returns None (confirmation skipped) when HiBob credentials are not
-        configured; raises on fetch failure so the caller can fail safe.
+        Raises if confirmation cannot be performed so the caller can fail safe.
         """
         hb = self.config.hibob
         if not (hb.service_user_id and hb.service_user_token):
-            logger.warning("HiBob credentials not configured — skipping HiBob confirmation")
-            return None
+            raise RuntimeError(
+                "HiBob confirmation enabled but credentials are not configured"
+            )
 
         from clients.hibob import HiBobClient
         client = HiBobClient(
@@ -249,6 +251,7 @@ class RehireDetectionModule:
         disabled_ids: Set[str],
         email: str = "",
         hibob_active: Optional[Set[str]] = None,
+        hibob_unavailable: bool = False,
     ) -> Optional[str]:
         """Classify a [Disabled]-tagged Snipe user against AAD + HiBob state.
 
@@ -266,6 +269,8 @@ class RehireDetectionModule:
         # Unparseable leave date -> treat as passed (do NOT auto-restore)
         if leave_date_passed(azure_user, default_on_invalid=True):
             return "ambiguous: leave date passed"
+        if hibob_unavailable:
+            return "ambiguous: HiBob unavailable; HR confirmation required"
         # HR source of truth must agree before an automatic restore.
         if hibob_active is not None and email and email not in hibob_active:
             return "ambiguous: not active in HiBob (HR source of truth)"
@@ -280,6 +285,7 @@ class RehireDetectionModule:
         dry_run: bool,
         results: Dict[str, Any],
         hibob_active: Optional[Set[str]] = None,
+        hibob_unavailable: bool = False,
     ) -> None:
         email = (snipe_user.get("email") or "").lower().strip()
         if not email:
@@ -288,6 +294,7 @@ class RehireDetectionModule:
         verdict = self._classify(
             active_by_email.get(email), leaver_ids, disabled_ids,
             email=email, hibob_active=hibob_active,
+            hibob_unavailable=hibob_unavailable,
         )
         if verdict is None:
             return  # AAD account disabled or deleted -> tag is correct
@@ -311,9 +318,25 @@ class RehireDetectionModule:
 
         if self._restore_user_name(snipe_user, dry_run):
             results["names_restored"] += 1
+        else:
+            results["errors"].append(
+                f"user {snipe_user.get('id')}: failed to restore disabled name"
+            )
 
-        restored = self._restore_pending_assets(snipe_user, dry_run)
+        restored, restore_failures = self._restore_pending_assets(snipe_user, dry_run)
         results["assets_restored"] += restored
+        results["asset_restore_failures"] += restore_failures
+
+        if restore_failures:
+            results["ambiguous"].append({
+                "snipe_id": snipe_user.get("id"),
+                "name": display,
+                "email": email,
+                "reason": f"{restore_failures} Pending asset restore(s) failed",
+            })
+            results["errors"].append(
+                f"user {snipe_user.get('id')}: {restore_failures} asset restore failures"
+            )
 
         results["rehired_users"].append({
             "snipe_id": snipe_user.get("id"),
@@ -355,12 +378,19 @@ class RehireDetectionModule:
         logger.info(f"Renamed user {user_id}: {current!r} -> {restored!r}")
         return True
 
-    def _restore_pending_assets(self, snipe_user: Dict[str, Any], dry_run: bool) -> int:
+    def _restore_pending_assets(
+        self,
+        snipe_user: Dict[str, Any],
+        dry_run: bool,
+    ) -> Tuple[int, int]:
         """Set the user's Pending assets (still assigned to them) back to Deployed."""
         user_id = snipe_user.get("id")
+        if not user_id:
+            return 0, 1
         pending_id = self.config.snipeit.status_pending_id
         deployed_id = self.config.snipeit.status_deployed_id
         restored = 0
+        failures = 0
 
         for asset in self.snipe.get_user_assets(user_id):
             asset_id = asset.get("id")
@@ -368,18 +398,41 @@ class RehireDetectionModule:
 
             # Only touch assets Leavers parked at Pending
             status = asset.get("status_label")
-            status_id = status.get("id") if isinstance(status, dict) else None
+            status_id = status.get("id") if isinstance(status, dict) else status
+            try:
+                status_id = int(status_id) if status_id is not None else None
+            except (TypeError, ValueError):
+                status_id = None
             if status_id != pending_id:
                 logger.debug(f"Asset {asset_name} not Pending (status={status_id}) — skipping")
                 continue
 
             # Verify still assigned to this user (mirror of Leavers' check)
             current = self.snipe.get_asset_by_id(asset_id)
-            if current:
-                assigned_id = self.snipe.get_assigned_user_id(current)
-                if assigned_id and assigned_id != user_id:
-                    logger.debug(f"Asset {asset_name} now assigned elsewhere — skipping")
-                    continue
+            if not current:
+                logger.error("Could not verify asset %s before rehire restore", asset_id)
+                failures += 1
+                continue
+            assigned_id = self.snipe.get_assigned_user_id(current)
+            if assigned_id != int(user_id):
+                logger.debug(f"Asset {asset_name} now assigned elsewhere — skipping")
+                continue
+            current_status = current.get("status_label")
+            current_status_id = (
+                current_status.get("id")
+                if isinstance(current_status, dict)
+                else current_status
+            )
+            try:
+                current_status_id = int(current_status_id)
+            except (TypeError, ValueError):
+                current_status_id = None
+            if current_status_id != pending_id:
+                logger.debug(
+                    "Asset %s no longer Pending after verification — skipping",
+                    asset_name,
+                )
+                continue
 
             if dry_run:
                 logger.info(f"[DRY-RUN] Would restore asset {asset_name}: Pending -> Deployed")
@@ -391,8 +444,9 @@ class RehireDetectionModule:
                 restored += 1
             else:
                 logger.error(f"Failed to restore asset {asset_name} for user {user_id}")
+                failures += 1
 
-        return restored
+        return restored, failures
 
     # ------------------------------------------------------------------
     def _print_summary(self, results: Dict[str, Any], dry_run: bool) -> None:
@@ -402,6 +456,7 @@ class RehireDetectionModule:
             f"{results['rehires_detected']} rehires",
             f"{results['names_restored']} names restored",
             f"{results['assets_restored']} assets restored",
+            f"{results['asset_restore_failures']} asset restore failures",
             f"{len(results['ambiguous'])} ambiguous",
         ]
         if results["errors"]:

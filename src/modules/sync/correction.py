@@ -19,7 +19,11 @@ from core.client_factory import create_jamf_client, create_snipeit_client, creat
 from infra.audit_csv import AuditCSV
 from infra.progress import ProgressTracker
 from infra.helpers import rate_limit_delay
-from matching.user_matcher import UserMatcher, pick_primary_local_identity
+from matching.user_matcher import (
+    UserMatcher,
+    can_auto_reassign,
+    pick_primary_local_identity,
+)
 from matching.ai_resolver import AIResolver
 
 
@@ -49,6 +53,11 @@ class CorrectionModule:
         self._jamf_cache: Dict[str, Optional[Dict]] = {}
         # Azure leaver/disabled emails (loaded lazily on first validation)
         self._azure_inactive_emails: Optional[set] = None
+        self._consecutive_errors = 0
+        self._error_abort_threshold = max(
+            1, int(self.settings.get("consecutive_error_abort", 5))
+        )
+        self._dry_run = False
 
     def _load_azure_inactive(self) -> set:
         """Load set of emails for leavers+disabled Azure users."""
@@ -81,11 +90,30 @@ class CorrectionModule:
         """User is inactive if [Disabled] prefix OR in Azure leaver/disabled groups."""
         if not isinstance(user, dict):
             return False
-        name = user.get("name") or ""
+        name = user.get("name") or user.get("first_name") or ""
         if name.startswith("[Disabled]"):
             return True
         email = (user.get("email") or "").lower()
         return email in self._load_azure_inactive()
+
+    def _notify_critical_checkout_failure(
+        self,
+        asset_id: int,
+        previous_uid: Optional[int],
+        target_uid: Optional[int],
+        hostname: str = "",
+    ) -> None:
+        """Escalate when checkout + rollback fail, to avoid silent orphaning."""
+        msg = (
+            f"Critical checkout failure: asset {asset_id}, host {hostname or 'unknown'}, "
+            f"target user {target_uid}, previous user {previous_uid}"
+        )
+        logger.error(msg)
+        if self.slack:
+            try:
+                self.slack.send(msg)
+            except Exception:
+                logger.debug("Slack notify failed for critical checkout failure")
 
     # ------------------------------------------------------------------
     # Public
@@ -102,11 +130,14 @@ class CorrectionModule:
             Results dictionary with statistics and details.
         """
         logger.info(f"Starting Self-Healing Correction: dry_run={dry_run}")
+        self._dry_run = dry_run
 
         results: Dict[str, Any] = {
             "total_assets_checked": 0,
             "correct_assignments": 0,
             "mismatches_found": 0,
+            "manual_review": 0,
+            "corrections_planned": 0,
             "corrections_made": 0,
             "unassigned_skipped": 0,
             "no_jamf_device": 0,
@@ -184,6 +215,7 @@ class CorrectionModule:
         try:
             for i, (asset, current_uid) in enumerate(checked_out_assets, 1):
                 results["total_assets_checked"] += 1
+                errors_before = results["errors"]
 
                 try:
                     self._validate_asset(
@@ -202,10 +234,22 @@ class CorrectionModule:
                         notes=str(e),
                     )
 
+                if results["errors"] > errors_before:
+                    self._consecutive_errors += 1
+                else:
+                    self._consecutive_errors = 0
+
+                if self._consecutive_errors >= self._error_abort_threshold:
+                    logger.error(
+                        "Aborting correction after %d consecutive asset errors",
+                        self._consecutive_errors,
+                    )
+                    break
+
                 progress.advance()
 
                 # Batch delay
-                if i % self.batch_size == 0 and i < len(checked_out_assets):
+                if not dry_run and i % self.batch_size == 0 and i < len(checked_out_assets):
                     batch_num = i // self.batch_size
                     total_batches = (
                         len(checked_out_assets) + self.batch_size - 1
@@ -220,7 +264,7 @@ class CorrectionModule:
 
         self._print_summary(results, dry_run)
 
-        if self.config.slack.notify_inline and results.get("details"):
+        if not dry_run and self.config.slack.notify_inline and results.get("details"):
             mismatch_items = [
                 d for d in results["details"] if d.get("type") == "mismatch"
             ]
@@ -254,14 +298,21 @@ class CorrectionModule:
                     scope=self.config.azure.scope,
                     timeout=self.config.api.timeout_seconds,
                 )
-                if self.config.azure.starters_group_id:
-                    azure_users = azure.get_group_members(self.config.azure.starters_group_id)
+                azure_users = azure.get_all_active_users()
                 azure.close()
             except Exception as e:
                 logger.warning(f"Could not load Azure AD users: {e}")
 
             ai_api_key = getattr(self.config, 'ai_api_key', '') or os.environ.get('AI_API_KEY', '')
-            ai_resolver = AIResolver(api_key=ai_api_key, slack=self.slack) if ai_api_key else None
+            ai_resolver = (
+                AIResolver(
+                    api_key=ai_api_key,
+                    slack=None if self._dry_run else self.slack,
+                    persist_cache=not self._dry_run,
+                )
+                if ai_api_key
+                else None
+            )
 
             self._user_matcher = UserMatcher(
                 users=users,
@@ -363,6 +414,10 @@ class CorrectionModule:
             return
 
         expected_uid = int(fresh_match.get("id", 0))
+        if not expected_uid:
+            results["no_fresh_match"] += 1
+            logger.warning("Fresh match for asset %s has no valid user id", asset_id)
+            return
         expected_user_name = fresh_match.get("name", "")
         match_reason = debug_info.get("exact_hit_reason", "fuzzy")
 
@@ -375,43 +430,19 @@ class CorrectionModule:
             )
             return
 
-        # ---- Safety: never reassign FROM an active user TO a disabled user ----
-        current_is_disabled = current_user_name.strip().startswith("[Disabled]")
-        expected_is_disabled = expected_user_name.strip().startswith("[Disabled]")
-
-        # Jamf local account is source of truth — always trust it.
-        # If local matches a [Disabled] user, the machine is still theirs
-        # (notice period, returning it, etc.). Reassign regardless.
-
-        # ---- Safety: only auto-correct on EXACT matches ----
-        # Fuzzy and AI matches can be wrong (e.g. Jane Winters -> Jane Porter
-        # when it should be Jane Sommers who changed surname).
-        # If current assignment is to an active user and the match is fuzzy/AI,
-        # DON'T auto-correct — just report to Slack for investigation.
-        is_exact_match = match_reason and match_reason.startswith(("full_name=", "email=", "email_prefix=", "username=", "username_normalized=", "override"))
-        if not is_exact_match and not current_is_disabled:
-            logger.info(
-                f"Asset {asset_id} ({serial}): fuzzy/AI match suggests "
-                f"'{expected_user_name}' but currently assigned to active user "
-                f"'{current_user_name}' — keeping current, sending to Slack"
-            )
-            results["details"].append({
-                "type": "mismatch",
-                "description": (
-                    f"`{serial}` *{asset_name}*\n"
-                    f"      Currently: *{current_user_name}* (active)\n"
-                    f"      Local account `{primary_username}` fuzzy-matches: *{expected_user_name}*\n"
-                    f"      Match type: {match_reason}\n"
-                    f"      Action: Kept current assignment — needs manual review"
-                ),
-            })
-            results["correct_assignments"] += 1
-            return
-
-        # ---- Mismatch detected (exact match disagrees with assignment) ----
-        # Auto-correctable cases DON'T go to Slack — Slack only for manual-review.
-        # Will be appended to results["details"] only if correction fails below.
+        # ---- Mismatch detected ----
         results["mismatches_found"] += 1
+        current_user = assigned_to if isinstance(assigned_to, dict) else {}
+        if not current_user.get("name") and not current_user.get("email"):
+            current_user = self.snipe.get_user_by_id(current_uid) or current_user
+            current_user_name = str(
+                current_user.get("name")
+                or current_user.get("first_name")
+                or current_user_name
+            )
+        current_inactive = self._is_inactive_user(current_user)
+        target_inactive = self._is_inactive_user(fresh_match)
+
         mismatch_desc = (
             f"`{serial}` *{asset_name}*\n"
             f"      Currently: *{current_user_name}*\n"
@@ -420,7 +451,53 @@ class CorrectionModule:
         )
         logger.warning(f"MISMATCH: {mismatch_desc}")
 
+        may_reassign = can_auto_reassign(
+            match_reason,
+            current_inactive=current_inactive,
+            target_inactive=target_inactive,
+        )
+        if not may_reassign:
+            if target_inactive:
+                reason = "target user is inactive"
+            elif match_reason.startswith("ai_resolved"):
+                reason = "AI matches cannot replace an active assignee"
+            else:
+                reason = "match is fuzzy or otherwise non-deterministic"
+            logger.info(
+                "Keeping assignment for asset %s: %s",
+                asset_id,
+                reason,
+            )
+            results["manual_review"] += 1
+            results["details"].append({
+                "type": "mismatch",
+                "description": (
+                    f"{mismatch_desc}\n"
+                    f"      Action: Kept current assignment — {reason}"
+                ),
+            })
+            audit.write(
+                serial=serial,
+                asset_id=str(asset_id),
+                asset_name=asset_name,
+                current_user_id=str(current_uid),
+                current_user_name=current_user_name,
+                expected_user_id=str(expected_uid),
+                expected_user_name=expected_user_name,
+                jamf_username=primary_username,
+                match_reason=match_reason,
+                action="manual_review",
+                result="skipped",
+                notes=reason,
+            )
+            return
+
         if dry_run:
+            results["corrections_planned"] += 1
+            results["details"].append({
+                "type": "projected_change",
+                "description": f"{mismatch_desc}\n      Action: Would reassign",
+            })
             audit.write(
                 serial=serial,
                 asset_id=str(asset_id),
@@ -472,14 +549,32 @@ class CorrectionModule:
         )
         if checkout_ok:
             results["corrections_made"] += 1
+            status_note = "Reassigned successfully"
+            audit_result = "ok"
             # If asset was Pending + disabled previous owner, clear to Checked Out
             # since new active user now has it
             asset_status = asset.get("status_label") or {}
             if isinstance(asset_status, dict) and asset_status.get("id") == self.config.snipeit.status_pending_id:
                 prev_assignee = asset.get("assigned_to") or {}
                 if self._is_inactive_user(prev_assignee):
-                    self.snipe.update_asset_status(asset_id, self.config.snipeit.status_deployed_id)
-                    logger.info(f"Cleared Pending status on asset {asset_id} (now active user)")
+                    if self.snipe.update_asset_status(
+                        asset_id,
+                        self.config.snipeit.status_deployed_id,
+                    ):
+                        logger.info(
+                            f"Cleared Pending status on asset {asset_id} (now active user)"
+                        )
+                    else:
+                        status_note = "Reassigned, but failed to clear Pending status"
+                        audit_result = "partial"
+                        results["errors"] += 1
+                        results["details"].append({
+                            "type": "mismatch",
+                            "description": (
+                                f"{mismatch_desc}\n"
+                                "      Assignment corrected, but Pending status could not be cleared"
+                            ),
+                        })
             logger.info(
                 f"CORRECTED: Asset {asset_id} ({serial}) reassigned "
                 f"from user {current_uid} ({current_user_name}) "
@@ -496,47 +591,52 @@ class CorrectionModule:
                 jamf_username=primary_username,
                 match_reason=match_reason,
                 action="correct",
-                result="ok",
-                notes="Reassigned successfully",
+                result=audit_result,
+                notes=status_note,
             )
-        else:
-            # Rollback: re-checkout to the original user to avoid orphaned asset
-            logger.warning(
-                f"Checkout to user {expected_uid} failed — rolling back "
-                f"to original user {current_uid}"
-            )
-            rollback_ok = self.snipe.checkout_asset(
-                asset_id, current_uid,
-                note=f"Rollback: checkout to {expected_uid} failed, restoring original assignment",
-            )
-            if rollback_ok:
-                logger.info(f"Rollback successful: asset {asset_id} back to user {current_uid}")
-                results["details"].append({
-                    "type": "mismatch",
-                    "description": f"{mismatch_desc}\n      *Action failed:* Checkout to expected user failed, restored original",
-                })
-            else:
-                logger.error(f"ROLLBACK FAILED: asset {asset_id} is now unassigned!")
-                results["details"].append({
-                    "type": "mismatch",
-                    "description": f"{mismatch_desc}\n      *Action failed:* Checkout AND rollback failed — asset unassigned, manual fix needed",
-                })
+            return
 
-            results["errors"] += 1
-            audit.write(
-                serial=serial,
-                asset_id=str(asset_id),
-                asset_name=asset_name,
-                current_user_id=str(current_uid),
-                current_user_name=current_user_name,
-                expected_user_id=str(expected_uid),
-                expected_user_name=expected_user_name,
-                jamf_username=primary_username,
-                match_reason=match_reason,
-                action="correct",
-                result="error",
-                notes="Checkout failed after check-in — asset unassigned!",
-            )
+        # Rollback: re-checkout to the original user to avoid orphaned asset
+        logger.warning(
+            f"Checkout to user {expected_uid} failed — rolling back "
+            f"to original user {current_uid}"
+        )
+        rollback_ok = self.snipe.checkout_asset(
+            asset_id,
+            current_uid,
+            note=f"Rollback: checkout to {expected_uid} failed, restoring original assignment",
+        )
+        if rollback_ok:
+            logger.info(f"Rollback successful: asset {asset_id} back to user {current_uid}")
+            failure_note = "Checkout failed; original assignment restored"
+            results["details"].append({
+                "type": "mismatch",
+                "description": f"{mismatch_desc}\n      *Action failed:* Checkout to expected user failed, restored original",
+            })
+        else:
+            logger.error(f"ROLLBACK FAILED: asset {asset_id} is now unassigned!")
+            self._notify_critical_checkout_failure(asset_id, current_uid, expected_uid)
+            failure_note = "Checkout and rollback failed; asset is unassigned"
+            results["details"].append({
+                "type": "mismatch",
+                "description": f"{mismatch_desc}\n      *Action failed:* Checkout AND rollback failed — asset unassigned, manual fix needed",
+            })
+
+        results["errors"] += 1
+        audit.write(
+            serial=serial,
+            asset_id=str(asset_id),
+            asset_name=asset_name,
+            current_user_id=str(current_uid),
+            current_user_name=current_user_name,
+            expected_user_id=str(expected_uid),
+            expected_user_name=expected_user_name,
+            jamf_username=primary_username,
+            match_reason=match_reason,
+            action="correct",
+            result="error",
+            notes=failure_note,
+        )
 
     # ------------------------------------------------------------------
     # Summary
@@ -549,6 +649,8 @@ class CorrectionModule:
             f"Correction ({mode}): {results['total_assets_checked']} checked, "
             f"{results['correct_assignments']} correct, "
             f"{results['mismatches_found']} mismatches, "
+            f"{results['manual_review']} manual review, "
+            f"{results['corrections_planned']} planned, "
             f"{results['corrections_made']} corrected, "
             f"{results['errors']} errors"
         )
