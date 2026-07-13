@@ -301,6 +301,15 @@ class Config:
                     "accessory_category_id": int(_env("PERIPHERALS_CATEGORY_ID", "4")),
                     "equipment_mapping_file": "config/equipment_mapping.json",
                 },
+                # Safety latch: dry_run defaults true, so rehire detection makes
+                # no changes until REHIRE_DETECTION_DRY_RUN is explicitly "false".
+                "rehire_detection": {
+                    "dry_run": _env("REHIRE_DETECTION_DRY_RUN", "true").strip().lower() != "false",
+                },
+                # Contractor marking is off unless MARK_CONTRACTORS is "true".
+                "user_enrichment": {
+                    "mark_contractors": _env("MARK_CONTRACTORS", "false").strip().lower() == "true",
+                },
             },
         }
 
