@@ -8,6 +8,35 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+EXACT_MATCH_PREFIXES = (
+    "full_name=",
+    "email=",
+    "email_prefix=",
+    "username=",
+    "username_normalized=",
+    "override",
+)
+
+
+def is_exact_match_reason(match_reason: str) -> bool:
+    """Return whether a match reason is deterministic enough to reassign."""
+    return bool(match_reason) and match_reason.startswith(EXACT_MATCH_PREFIXES)
+
+
+def can_auto_reassign(
+    match_reason: str,
+    *,
+    current_inactive: bool,
+    target_inactive: bool,
+    allow_reassignment: bool = True,
+) -> bool:
+    """Apply the shared safety policy for automated assignment changes."""
+    if not allow_reassignment or target_inactive:
+        return False
+    if is_exact_match_reason(match_reason):
+        return True
+    return current_inactive and match_reason.startswith("ai_resolved")
+
 
 # =============================================================================
 # String-similarity helpers
@@ -499,6 +528,7 @@ def pick_primary_local_identity(
         "root", "daemon", "nobody", "guest",
         "_spotlight", "_mbsetupuser",
         "admin", "administrator", "jamfadmin",
+        "temp", "temporary", "test", "demo", "service", "user",
         # Additional org-specific accounts are added via skip_usernames config
     }
     # Merge config-level skip usernames

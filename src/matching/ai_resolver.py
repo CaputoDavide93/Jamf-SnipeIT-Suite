@@ -27,8 +27,9 @@ except ImportError:
     anthropic = None  # type: ignore
     _LLM_AVAILABLE = False
 
-# Model to use for resolution — fast and cheap
-_MODEL_ID = os.environ.get("AI_MODEL_ID", "claude-haiku-4-5-20251001")
+# Model to use for resolution — configurable without a brittle static allowlist
+_MODEL_DEFAULT = "claude-haiku-4-5-20251001"
+_MODEL_ID = os.environ.get("AI_MODEL_ID", _MODEL_DEFAULT).strip() or _MODEL_DEFAULT
 # Cache file (resolutions persist across runs)
 _CACHE_PATH = Path(os.environ.get("AI_CACHE_PATH", "/app/output/ai_cache.json"))
 # S3 cache bucket/key — when set, cache syncs to S3 (survives Fargate restarts)
@@ -41,17 +42,48 @@ _CACHE_TTL_DAYS = 30
 class AIResolver:
     """Resolve ambiguous user matches using an LLM — with persistent cache."""
 
-    def __init__(self, api_key: str = "", enabled: bool = True, slack=None):
+    def __init__(
+        self,
+        api_key: str = "",
+        enabled: bool = True,
+        slack=None,
+        persist_cache: bool = True,
+    ):
         self.api_key = api_key or os.environ.get("AI_API_KEY", "")
-        self.enabled = enabled and _LLM_AVAILABLE and bool(self.api_key)
+        self._model_id = _MODEL_ID
+        self._persist_cache = persist_cache
+        self.enabled, self.disabled_reason = self._compute_enablement(enabled)
         self._client = None
         self._rate_limited = False  # Set True when API returns rate-limit error
+        self._rate_limit_warned = False
         self._slack = slack  # SlackClient for rate-limit alerts
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._load_cache()
 
+        if self.enabled:
+            logger.info(
+                "AI resolver enabled with model %s (cache: %d entries)",
+                self._model_id,
+                len(self._cache),
+            )
+        else:
+            logger.info(f"AI resolver disabled: {self.disabled_reason}")
+
+    def _compute_enablement(self, enabled_flag: bool) -> tuple:
+        """Return (enabled, reason) pair."""
+        if not enabled_flag:
+            return False, "disabled via constructor"
+        if not _LLM_AVAILABLE:
+            return False, "anthropic SDK not installed"
+        if not self.api_key:
+            return False, "AI_API_KEY missing"
+        return True, "enabled"
+
     def _notify_rate_limit(self, error: Exception) -> None:
         """Post Slack alert when AI hits rate limit (once per run)."""
+        if self._rate_limit_warned:
+            return
+        self._rate_limit_warned = True
         if not self._slack:
             return
         try:
@@ -69,13 +101,6 @@ class AIResolver:
             self._slack.post_to_channel(channel, "AI resolver rate-limited", blocks)
         except Exception as e:
             logger.debug(f"Rate-limit alert post failed: {e}")
-
-        if self.enabled:
-            logger.info(f"AI resolver: enabled (cache: {len(self._cache)} entries)")
-        elif enabled and not _LLM_AVAILABLE:
-            logger.debug("AI resolver: LLM package not installed")
-        elif enabled and not self.api_key:
-            logger.debug("AI resolver: no API key configured")
 
     # ------------------------------------------------------------------
     # Cache
@@ -145,7 +170,8 @@ class AIResolver:
             "result_id": result.get("id") if result else None,
             "keep_current": result.get("_keep_current") if result else None,
         }
-        self._save_cache()
+        if self._persist_cache:
+            self._save_cache()
 
     def _is_rate_limit_error(self, err: Exception) -> bool:
         """Detect Anthropic API rate limit errors."""
@@ -244,7 +270,7 @@ If you truly cannot determine the correct match, respond:
                 return None
 
             response = client.messages.create(
-                model=_MODEL_ID,
+                model=self._model_id,
                 max_tokens=200,
                 messages=[{"role": "user", "content": prompt}],
             )

@@ -291,13 +291,13 @@ def get_health_server() -> Optional[HealthCheckServer]:
     return _health_server
 
 
-def start_health_server(port: int = 8080, host: str = "0.0.0.0") -> HealthCheckServer:
+def start_health_server(port: int = 8080, host: str = "127.0.0.1") -> HealthCheckServer:
     """
     Start the global health check server.
     
     Args:
         port: Port to listen on (default: 8080)
-        host: Host to bind to (default: 0.0.0.0)
+        host: Host to bind to (default: 127.0.0.1)
     
     Returns:
         HealthCheckServer instance
@@ -308,7 +308,19 @@ def start_health_server(port: int = 8080, host: str = "0.0.0.0") -> HealthCheckS
         logger.warning("Health server already running")
         return _health_server
     
+    auth_token = os.environ.get("HEALTH_AUTH_TOKEN")
+    if not auth_token and host not in ("127.0.0.1", "localhost", "::1"):
+        raise RuntimeError(
+            "HEALTH_AUTH_TOKEN required when binding health server to non-loopback host (set host=127.0.0.1 or provide token)"
+        )
+
     _health_server = HealthCheckServer(port=port, host=host)
+    logger.info(
+        "Health server starting on %s:%s (auth=%s)",
+        host,
+        port,
+        "enabled" if auth_token else "disabled",
+    )
     _health_server.start(blocking=False)
     
     return _health_server

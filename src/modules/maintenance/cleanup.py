@@ -41,24 +41,20 @@ class CleanupModule:
 
     def find_duplicates(self, users: List[Dict]) -> List[List[Dict]]:
         """
-        Find groups of users that share the same normalised name.
+        Find groups of users that share the same non-empty email address.
 
         Returns list of groups, each group is a list of user dicts.
         Only groups with 2+ members are returned.
         """
-        by_name: Dict[str, List[Dict]] = {}
+        by_email: Dict[str, List[Dict]] = {}
 
         for u in users:
-            raw_name = (u.get("name") or "").strip()
-            # Strip [Disabled] prefix for comparison
-            norm = raw_name.lower()
-            if norm.startswith("[disabled]"):
-                norm = norm.replace("[disabled]", "").strip()
-            if not norm or len(norm) < 3:
+            email = (u.get("email") or "").strip().lower()
+            if not email or "@" not in email:
                 continue
-            by_name.setdefault(norm, []).append(u)
+            by_email.setdefault(email, []).append(u)
 
-        return [group for group in by_name.values() if len(group) >= 2]
+        return [group for group in by_email.values() if len(group) >= 2]
 
     def find_junk_accounts(self, users: List[Dict]) -> List[Dict]:
         """Find package_* and other junk/system accounts."""
@@ -164,17 +160,44 @@ class CleanupModule:
                         f"→ merge into '{keeper_name}' (id={keeper_id})"
                     )
 
+                    merge_ok = True
+                    moved_assets = 0
+                    moved_asset_ids: List[int] = []
+
                     # Reassign assets from loser → keeper
                     if loser_assets > 0:
                         assets = self.snipe.get_user_assets(loser_id)
-                        for asset in assets:
+                        if len(assets) < int(loser_assets):
+                            logger.error(
+                                "User %s reports %s assets but only %s were fetched; skipping merge",
+                                loser_id,
+                                loser_assets,
+                                len(assets),
+                            )
+                            results["errors"] += 1
+                            merge_ok = False
+                        for asset in assets if merge_ok else []:
+                            if not merge_ok:
+                                break
                             aid = asset.get("id")
                             aname = asset.get("name") or asset.get("asset_tag") or str(aid)
 
                             if dry_run:
                                 logger.info(f"  [DRY] Would reassign asset {aname} (id={aid}) → user {keeper_id}")
                                 results["assets_reassigned"] += 1
+                                moved_assets += 1
                             else:
+                                current = self.snipe.get_asset_by_id(aid)
+                                assigned_id = self.snipe.get_assigned_user_id(current or {})
+                                if assigned_id != int(loser_id):
+                                    logger.error(
+                                        "Asset %s is no longer assigned to duplicate user %s; skipping merge",
+                                        aid,
+                                        loser_id,
+                                    )
+                                    results["errors"] += 1
+                                    merge_ok = False
+                                    continue
                                 # Check-in from loser, then checkout to keeper
                                 ok_in = self.snipe.checkin_asset(aid, note=f"Cleanup: merging duplicate user {loser_id}")
                                 if ok_in:
@@ -184,28 +207,74 @@ class CleanupModule:
                                     )
                                     if ok_out:
                                         results["assets_reassigned"] += 1
+                                        moved_assets += 1
+                                        moved_asset_ids.append(aid)
                                         logger.debug(f"  Reassigned asset {aname} → user {keeper_id}")
                                     else:
                                         results["errors"] += 1
+                                        merge_ok = False
                                         logger.error(f"  Failed to checkout asset {aname} to keeper {keeper_id}")
+                                        rollback_ok = self.snipe.checkout_asset(
+                                            aid,
+                                            loser_id,
+                                            note="Cleanup rollback: keeper checkout failed",
+                                        )
+                                        if not rollback_ok:
+                                            logger.critical(
+                                                "Cleanup rollback failed for asset %s; asset is unassigned",
+                                                aid,
+                                            )
                                 else:
                                     results["errors"] += 1
+                                    merge_ok = False
                                     logger.error(f"  Failed to checkin asset {aname} from loser {loser_id}")
-                            time.sleep(0.3)
+                            if not dry_run:
+                                time.sleep(0.3)
+
+                    if not dry_run and not merge_ok and moved_asset_ids:
+                        logger.warning(
+                            "Rolling back %d earlier asset transfer(s) for user %s",
+                            len(moved_asset_ids),
+                            loser_id,
+                        )
+                        for moved_asset_id in reversed(moved_asset_ids):
+                            rollback_in = self.snipe.checkin_asset(
+                                moved_asset_id,
+                                note="Cleanup rollback: duplicate merge incomplete",
+                            )
+                            rollback_out = rollback_in and self.snipe.checkout_asset(
+                                moved_asset_id,
+                                loser_id,
+                                note="Cleanup rollback: restoring duplicate user assignment",
+                            )
+                            if rollback_out:
+                                results["assets_reassigned"] -= 1
+                                moved_assets -= 1
+                            else:
+                                logger.critical(
+                                    "Cleanup rollback failed for previously moved asset %s",
+                                    moved_asset_id,
+                                )
 
                     # Delete the loser
-                    if dry_run:
+                    if not merge_ok:
+                        logger.warning(
+                            "Not deleting duplicate user %s because asset transfer was incomplete",
+                            loser_id,
+                        )
+                    elif dry_run:
                         logger.info(f"  [DRY] Would delete user {loser_id} ({loser_name})")
                         results["users_deleted"] += 1
+                        results["users_merged"] += 1
                     else:
                         if self._delete_user(loser_id):
                             results["users_deleted"] += 1
+                            results["users_merged"] += 1
                             logger.info(f"  Deleted user {loser_id} ({loser_name})")
                         else:
                             results["errors"] += 1
                             logger.error(f"  Failed to delete user {loser_id}")
 
-                    results["users_merged"] += 1
                     audit.write(
                         action="merge_duplicate",
                         user_id=str(loser_id),
@@ -213,7 +282,10 @@ class CleanupModule:
                         email=loser.get("email", ""),
                         keeper_id=str(keeper_id),
                         keeper_name=keeper_name,
-                        notes=f"assets_moved={loser_assets}, dry_run={dry_run}",
+                        notes=(
+                            f"assets_moved={moved_assets}, merge_ok={merge_ok}, "
+                            f"dry_run={dry_run}"
+                        ),
                     )
 
             # --- Junk accounts ---

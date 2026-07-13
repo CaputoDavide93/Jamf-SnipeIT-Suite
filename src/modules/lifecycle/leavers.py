@@ -34,6 +34,9 @@ class LeaversModule:
         """
         self.config = config
         self.settings = config.modules.get("leavers", {})
+        self._error_abort_threshold = max(
+            1, int(self.settings.get("consecutive_error_abort", 5))
+        )
         
         # Initialize clients
         self.azure = AzureClient(
@@ -136,21 +139,39 @@ class LeaversModule:
         total_batches = (len(users) + BATCH_SIZE - 1) // BATCH_SIZE
         logger.info(f"Processing {len(users)} users in {total_batches} batches")
         progress = ProgressTracker("Leavers", total=len(users), log_every=25)
+        consecutive_errors = 0
+        abort_run = False
         
         for batch_num, batch_start in enumerate(range(0, len(users), BATCH_SIZE), 1):
             batch = users[batch_start:batch_start + BATCH_SIZE]
             logger.debug(f"Batch {batch_num}/{total_batches}: Processing {len(batch)} users")
             
             for user in batch:
+                errors_before = len(results["errors"])
                 try:
                     self._process_single_user(user, group_type, dry_run, pending_status_id, results)
                 except Exception as e:
                     logger.error(f"Error processing user {user.get('displayName')}: {e}")
                     results["errors"].append(str(e))
+                if len(results["errors"]) > errors_before:
+                    consecutive_errors += 1
+                else:
+                    consecutive_errors = 0
                 progress.advance()
+
+                if consecutive_errors >= self._error_abort_threshold:
+                    logger.error(
+                        "Aborting Leavers after %d consecutive user errors",
+                        consecutive_errors,
+                    )
+                    abort_run = True
+                    break
+
+            if abort_run:
+                break
             
             # Delay between batches
-            if batch_start + BATCH_SIZE < len(users):
+            if not dry_run and batch_start + BATCH_SIZE < len(users):
                 rate_limit_delay(2, "Leavers", batch_num, total_batches)
         
         progress.finish(extra=f"matched={results['matched_users']}, assets_updated={results['updated_assets']}")
@@ -187,6 +208,9 @@ class LeaversModule:
             return
         
         snipe_user_id = snipe_user.get("id")
+        if not snipe_user_id:
+            results["errors"].append(f"Snipe-IT user {email} has no id")
+            return
         logger.debug(f"Found Snipe-IT user: id={snipe_user_id}")
         
         # Add [Disabled] prefix only when user is truly inactive:
@@ -194,8 +218,14 @@ class LeaversModule:
         #   - employeeLeaveDateTime in the past (actually left)
         # Users still in notice period (in leavers group but accountEnabled=True,
         # leave date in future) do NOT get tagged yet.
-        if self._should_tag_disabled(user):
-            self._update_user_name_disabled(snipe_user, dry_run, results)
+        if not self._should_tag_disabled(user):
+            logger.info(
+                "Skipping %s: still active or leave date has not passed",
+                email,
+            )
+            return
+
+        self._update_user_name_disabled(snipe_user, dry_run, results)
         
         # Find user's assets
         assets = self._get_user_assets(snipe_user_id, snipe_user)
@@ -215,14 +245,22 @@ class LeaversModule:
             
             # Verify still assigned to this user
             current_asset = self.snipe.get_asset_by_id(asset_id)
-            if current_asset:
-                assigned_user_id = self.snipe.get_assigned_user_id(current_asset)
-                if assigned_user_id and assigned_user_id != snipe_user_id:
-                    logger.debug(f"Asset {asset_id} now assigned to different user, skipping")
-                    continue
+            if not current_asset:
+                logger.error("Could not verify current assignment for asset %s", asset_id)
+                results["errors"].append(f"asset {asset_id}: verification failed")
+                continue
+
+            assigned_user_id = self.snipe.get_assigned_user_id(current_asset)
+            if assigned_user_id != int(snipe_user_id):
+                logger.debug(
+                    "Asset %s no longer assigned to user %s, skipping",
+                    asset_id,
+                    snipe_user_id,
+                )
+                continue
             
             # Check if already pending
-            current_status_label = current_asset.get("status_label") if current_asset else asset.get("status_label")
+            current_status_label = current_asset.get("status_label")
             current_status_id = None
             if isinstance(current_status_label, dict):
                 current_status_id = current_status_label.get("id")
@@ -239,6 +277,7 @@ class LeaversModule:
             # Update status
             asset_name = asset.get("name") or asset.get("asset_tag") or asset_id
             
+            note = f"Leavers automation: marked Pending on {time.strftime('%Y-%m-%d')}"
             if dry_run:
                 logger.info(f"[DRY-RUN] Would mark asset {asset_name} as pending (keep assigned to leaver)")
                 results["updated_assets"] += 1
@@ -251,7 +290,17 @@ class LeaversModule:
                 status_ok = self.snipe.update_asset_status(asset_id, pending_status_id)
                 if not status_ok:
                     logger.error(f"Failed to set pending status on asset {asset_name}")
+                    results["errors"].append(f"asset {asset_id}: pending update failed")
                     continue
+
+                # Preserve existing notes and append one idempotent audit marker.
+                existing_notes = str(current_asset.get("notes") or "").strip()
+                if note not in existing_notes:
+                    updated_notes = "\n".join(
+                        part for part in (existing_notes, note) if part
+                    )
+                    if not self.snipe.update_asset(asset_id, {"notes": updated_notes}):
+                        logger.warning("Could not write pending note to asset %s", asset_id)
 
                 logger.info(f"Marked asset {asset_name} as pending (still assigned to leaver)")
                 results["updated_assets"] += 1
@@ -322,6 +371,9 @@ class LeaversModule:
             if self.snipe.update_user(user_id, update_data):
                 logger.info(f"Renamed user {user_id}: {current_name} -> {new_name}")
                 results["updated_user_names"] += 1
+            else:
+                logger.error("Failed to mark user %s as disabled", user_id)
+                results["errors"].append(f"user {user_id}: disabled name update failed")
     
     def _print_summary(self, results: Dict[str, Any], dry_run: bool) -> None:
         """Print processing summary."""

@@ -79,7 +79,10 @@ def cmd_leavers(args, config: Config):
     print("   Checking Azure AD for disabled users and updating Snipe-IT assets.\n")
     
     module = LeaversModule(config)
-    results = module.run(dry_run=args.dry_run)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
     
     # errors can be a list or int depending on module
     errors = results.get('errors', 0)
@@ -114,7 +117,10 @@ def cmd_snipe_to_jamf(args, config: Config):
     print("   Syncing user information from Snipe-IT assets to Jamf Pro.\n")
     
     module = SnipeToJamfModule(config)
-    results = module.run(dry_run=args.dry_run)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
     
     # errors can be a list or int depending on module
     errors = results.get('errors', 0)
@@ -130,7 +136,10 @@ def cmd_user_match(args, config: Config):
     print("   Matching and provisioning Jamf computers in Snipe-IT.\n")
     
     module = UserMatchModule(config)
-    results = module.run(dry_run=args.dry_run)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
     
     # errors can be a list or int depending on module
     errors = results.get('errors', 0)
@@ -146,19 +155,21 @@ def cmd_model_sync(args, config: Config):
     print("   Syncing hardware models between Jamf Pro and Snipe-IT.\n")
     
     module = ModelSyncModule(config)
-    
-    if getattr(args, 'check_only', False):
-        results = module.check_models()
-        print(f"\n📊 Model Check Results:")
-        print(f"   Total models in Jamf: {results['total_jamf_models']}")
-        print(f"   Missing in Snipe-IT: {len(results['missing_models'])}")
-        if results['missing_models']:
-            print("   Missing models:")
-            for model in results['missing_models']:
-                print(f"     - {model}")
-        return (0, results)
-    
-    results = module.run(dry_run=args.dry_run)
+    try:
+        if getattr(args, 'check_only', False):
+            results = module.check_models()
+            print(f"\n📊 Model Check Results:")
+            print(f"   Total models in Jamf: {results['total_jamf_models']}")
+            print(f"   Missing in Snipe-IT: {len(results['missing_models'])}")
+            if results['missing_models']:
+                print("   Missing models:")
+                for model in results['missing_models']:
+                    print(f"     - {model}")
+            return (0, results)
+
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
     
     # Return both exit code and results for summary
     return (0 if results['errors'] == 0 else 1, results)
@@ -227,7 +238,10 @@ def cmd_correction(args, config: Config):
     print("   Validating existing Snipe-IT assignments against Jamf data.\n")
 
     module = CorrectionModule(config)
-    results = module.run(dry_run=args.dry_run)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
 
     errors = results.get('errors', 0)
     error_count = len(errors) if isinstance(errors, list) else errors
@@ -503,10 +517,12 @@ def _write_run_summary(filepath: str, args, results: dict, module_data: dict):
                     f.write(f"  CRASHED: {data['exception']}\n")
                 else:
                     f.write(f"  Total devices:    {data.get('total_devices', 0)}\n")
+                    f.write(f"  Users created:    {data.get('users_created', 0)}\n")
                     f.write(f"  Assets created:   {data.get('assets_created', 0)}\n")
                     f.write(f"  Assets updated:   {data.get('assets_updated', 0)}\n")
                     f.write(f"  Checkouts:        {data.get('checkouts', 0)}\n")
                     f.write(f"  Reassignments:    {data.get('reassignments', 0)}\n")
+                    f.write(f"  Jamf updates:     {data.get('jamf_updates', 0)}\n")
                     f.write(f"  Skipped:          {data.get('skipped', 0)}\n")
                     f.write(f"  Errors:           {data.get('errors', 0)}\n")
         
@@ -538,6 +554,8 @@ def _write_run_summary(filepath: str, args, results: dict, module_data: dict):
                     f.write(f"  Assets checked:        {data.get('total_assets_checked', 0)}\n")
                     f.write(f"  Correct assignments:   {data.get('correct_assignments', 0)}\n")
                     f.write(f"  Mismatches found:      {data.get('mismatches_found', 0)}\n")
+                    f.write(f"  Manual review:         {data.get('manual_review', 0)}\n")
+                    f.write(f"  Corrections planned:   {data.get('corrections_planned', 0)}\n")
                     f.write(f"  Corrections made:      {data.get('corrections_made', 0)}\n")
                     f.write(f"  No Jamf device:        {data.get('no_jamf_device', 0)}\n")
                     f.write(f"  No fresh match:        {data.get('no_fresh_match', 0)}\n")

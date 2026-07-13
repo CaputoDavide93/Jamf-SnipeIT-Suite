@@ -211,23 +211,21 @@ class ModelSyncModule:
         }
         
         # Get unique models from Jamf
-        jamf_models = self.check_models()
-        results["models_checked"] = len(jamf_models)
+        jamf_model_report = self.check_models()
+        missing_models = jamf_model_report.get("missing_models", [])
+        results["models_checked"] = jamf_model_report.get("total_jamf_models", 0)
+        results["models_existing"] = len(
+            jamf_model_report.get("existing_models", [])
+        )
         
-        if not jamf_models:
+        if not results["models_checked"]:
             return results
         
         # Load current Snipe-IT data
         model_map = self._get_model_map()
         manufacturer_map = self._get_manufacturer_map()
         
-        for model_name in sorted(jamf_models):
-            # Check if model exists
-            if model_name.lower() in model_map:
-                results["models_existing"] += 1
-                logger.debug(f"Model exists: {model_name}")
-                continue
-            
+        for model_index, model_name in enumerate(sorted(missing_models), 1):
             # Need to create model
             logger.debug(f"Model missing in Snipe-IT: {model_name}")
             
@@ -244,7 +242,9 @@ class ModelSyncModule:
             if not mfr_id and self.auto_create_manufacturers:
                 if dry_run:
                     logger.info(f"[DRY-RUN] Would create manufacturer: {manufacturer_name}")
-                    mfr_id = 999  # Placeholder
+                    mfr_id = -model_index
+                    manufacturer_map[manufacturer_name.lower()] = mfr_id
+                    results["manufacturers_created"] += 1
                 else:
                     mfr_id = self.snipe.create_manufacturer(manufacturer_name)
                     if mfr_id:
@@ -259,6 +259,7 @@ class ModelSyncModule:
             # Create model
             if dry_run:
                 logger.info(f"[DRY-RUN] Would create model: {model_name}")
+                model_map[model_name.lower()] = -(1000 + model_index)
                 results["models_created"] += 1
             else:
                 model_id = self.snipe.create_model(
@@ -295,6 +296,9 @@ class ModelSyncModule:
         
         results = {
             "total_processed": 0,
+            "models_checked": 0,
+            "models_created": 0,
+            "manufacturers_created": 0,
             "updated": 0,
             "skipped": 0,
             "errors": 0,
@@ -302,9 +306,14 @@ class ModelSyncModule:
         
         # First, provision any missing models
         provision_results = self.provision_models(dry_run=dry_run)
+        results["models_checked"] = provision_results["models_checked"]
+        results["models_created"] = provision_results["models_created"]
+        results["manufacturers_created"] = provision_results["manufacturers_created"]
+        results["errors"] += len(provision_results["errors"])
         
         # Refresh model map after provisioning
-        self._model_map = None
+        if not dry_run:
+            self._model_map = None
         model_map = self._get_model_map()
         
         # Get all Jamf computers
@@ -348,7 +357,7 @@ class ModelSyncModule:
             progress.advance()
             
             # Rate limiting
-            if self.update_delay > 0:
+            if not dry_run and self.update_delay > 0:
                 rate_limit_delay(self.update_delay, "Model Sync", i, len(computers))
         
         progress.finish(extra=f"updated={results['updated']}, skipped={results['skipped']}, errors={results['errors']}")
@@ -432,6 +441,8 @@ class ModelSyncModule:
         
         logger.info(
             f"Model Sync ({mode}): {results['total_processed']} processed, "
+            f"{results['models_created']} models created, "
+            f"{results['manufacturers_created']} manufacturers created, "
             f"{results['updated']} updated, "
             f"{results['skipped']} skipped, "
             f"{results['errors']} errors"
