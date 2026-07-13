@@ -33,7 +33,7 @@ resource "aws_cloudwatch_metric_alarm" "task_failures" {
   evaluation_periods  = 1
   metric_name         = "TaskFailures"
   namespace           = "ECS/ContainerInsights"
-  period              = 86400  # 24 hours (task runs daily)
+  period              = 86400 # 24 hours (task runs daily)
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "notBreaching"

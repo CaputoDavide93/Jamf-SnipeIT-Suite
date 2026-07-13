@@ -67,9 +67,9 @@ module "jamf_snipeit_suite" {
   snipeit_api_token = var.snipeit_api_token
 
   # -- Azure AD --
-  azure_tenant_id        = var.azure_tenant_id
-  azure_client_id        = var.azure_client_id
-  azure_client_secret    = var.azure_client_secret
+  azure_tenant_id         = var.azure_tenant_id
+  azure_client_id         = var.azure_client_id
+  azure_client_secret     = var.azure_client_secret
   azure_leavers_group_id  = var.azure_leavers_group_id
   azure_disabled_group_id = var.azure_disabled_group_id
   azure_starters_group_id = var.azure_starters_group_id
@@ -77,6 +77,10 @@ module "jamf_snipeit_suite" {
   # -- Matching --
   matching_email_domain   = var.matching_email_domain
   matching_skip_usernames = var.matching_skip_usernames
+
+  # -- Feature flags (rehire detection live, contractor marking on) --
+  rehire_detection_dry_run = "false"
+  mark_contractors         = "true"
 
   # -- Slack --
   slack_bot_token  = var.slack_bot_token
@@ -90,7 +94,7 @@ module "jamf_snipeit_suite" {
   ai_api_key = var.ai_api_key
 
   # -- Schedule: daily 6am UTC (7am BST) --
-  schedule_expression = "cron(0 17 ? * TUE *)"  # Tue 17:00 UTC = 18:00 UK BST
+  schedule_expression = "cron(0 17 ? * TUE *)" # Tue 17:00 UTC = 18:00 UK BST
 
   # -- Container sizing (0.25 vCPU, 512MB — plenty for API calls) --
   container_cpu    = 256
