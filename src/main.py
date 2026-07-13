@@ -260,6 +260,17 @@ def cmd_health_check(args, config: Config):
     return (0, results)
 
 
+def cmd_pending_reconciliation(args, config: Config):
+    """Restore Pending assets whose owner is active again."""
+    from modules.maintenance.pending_reconciliation import PendingReconciliationModule
+    module = PendingReconciliationModule(config)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
+    return (0, results)
+
+
 def cmd_ai_audit(args, config: Config):
     """AI cross-platform audit."""
     from modules.maintenance.ai_audit import AIAuditModule
@@ -346,6 +357,7 @@ def cmd_run_group(args, config: Config):
         "ai-audit": cmd_ai_audit,
         "reconciliation": cmd_reconcile,
         "health-check": cmd_health_check,
+        "pending-reconciliation": cmd_pending_reconciliation,
         "monthly-digest": cmd_monthly_digest,
     }
     requested = [m.strip() for m in (args.modules or "").split(",") if m.strip()]
@@ -765,6 +777,12 @@ Examples:
     health_check_parser.add_argument('--dry-run', '-n', action='store_true',
         help='Report issues without sending Slack')
 
+    # Pending Reconciliation (restore Pending assets whose owner is active)
+    pending_recon_parser = subparsers.add_parser('pending-reconciliation',
+        help='Restore Pending assets whose owner is active again (Azure AD confirmed)')
+    pending_recon_parser.add_argument('--dry-run', '-n', action='store_true',
+        help='Report what would be restored without writing')
+
     # AI Audit (cross-platform LLM analysis)
     ai_audit_parser = subparsers.add_parser('ai-audit',
         help='AI-powered cross-platform audit (security, compliance, anomalies)')
@@ -851,6 +869,7 @@ Examples:
         'azure-starters': cmd_azure_starters,
         'correction': cmd_correction,
         'health-check': cmd_health_check,
+        'pending-reconciliation': cmd_pending_reconciliation,
         'ai-audit': cmd_ai_audit,
         'cleanup': cmd_cleanup,
         'user-enrichment': cmd_user_enrichment,

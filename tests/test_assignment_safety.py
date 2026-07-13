@@ -331,3 +331,81 @@ def test_model_provisioning_uses_report_models_not_report_keys():
     assert results["models_created"] == 1
     assert "macbook pro" in module._model_map
     assert "missing_models" not in module._model_map
+
+
+def _pending_asset(asset_id, serial, owner_id, owner_name, owner_email):
+    return {
+        "id": asset_id,
+        "serial": serial,
+        "status_label": {"id": 8, "name": "Pending"},
+        "assigned_to": {"id": owner_id, "name": owner_name, "email": owner_email},
+    }
+
+
+def _build_pending_module(assets, active_emails, update_ok=True):
+    from modules.maintenance.pending_reconciliation import PendingReconciliationModule
+    module = PendingReconciliationModule.__new__(PendingReconciliationModule)
+    module.config = SimpleNamespace(
+        snipeit=SimpleNamespace(status_pending_id=8, status_deployed_id=1)
+    )
+
+    class FakeSnipe:
+        def __init__(self):
+            self.status_updates = []
+
+        def get_all_assets(self):
+            return assets
+
+        def get_asset_by_id(self, asset_id):
+            return next((a for a in assets if a["id"] == asset_id), None)
+
+        def get_assigned_user_id(self, asset):
+            at = asset.get("assigned_to") or {}
+            return int(at["id"]) if at.get("id") else None
+
+        def update_asset_status(self, asset_id, status_id):
+            self.status_updates.append((asset_id, status_id))
+            return update_ok
+
+    class FakeAzure:
+        def get_all_active_users(self):
+            return [{"mail": e} for e in active_emails]
+
+    module.snipe = FakeSnipe()
+    module.azure = FakeAzure()
+    module.slack = None
+    return module
+
+
+def test_pending_recon_restores_active_owner():
+    assets = [_pending_asset(5, "ABC123", 10, "Active User", "active@example.com")]
+    module = _build_pending_module(assets, {"active@example.com"})
+    results = module.run(dry_run=False)
+    assert results["restored"] == 1
+    assert module.snipe.status_updates == [(5, 1)]
+
+
+def test_pending_recon_skips_disabled_owner():
+    assets = [_pending_asset(6, "DEF456", 11, "[Disabled] Gone User", "gone@example.com")]
+    module = _build_pending_module(assets, {"gone@example.com"})
+    results = module.run(dry_run=False)
+    assert results["restored"] == 0
+    assert results["skipped_disabled"] == 1
+    assert module.snipe.status_updates == []
+
+
+def test_pending_recon_skips_owner_not_active_in_azure():
+    assets = [_pending_asset(7, "GHI789", 12, "Maybe Leaver", "maybe@example.com")]
+    module = _build_pending_module(assets, set())  # nobody active in AAD
+    results = module.run(dry_run=False)
+    assert results["restored"] == 0
+    assert results["skipped_unconfirmed"] == 1
+    assert module.snipe.status_updates == []
+
+
+def test_pending_recon_dry_run_never_writes():
+    assets = [_pending_asset(8, "JKL012", 13, "Active User", "active@example.com")]
+    module = _build_pending_module(assets, {"active@example.com"})
+    results = module.run(dry_run=True)
+    assert results["candidates"] == 1
+    assert module.snipe.status_updates == []
