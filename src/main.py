@@ -271,6 +271,17 @@ def cmd_pending_reconciliation(args, config: Config):
     return (0, results)
 
 
+def cmd_jamf_location_cleanup(args, config: Config):
+    """Clear Jamf location for In-Stock/Retired machines."""
+    from modules.maintenance.jamf_location_cleanup import JamfLocationCleanupModule
+    module = JamfLocationCleanupModule(config)
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
+    return (0, results)
+
+
 def cmd_ai_audit(args, config: Config):
     """AI cross-platform audit."""
     from modules.maintenance.ai_audit import AIAuditModule
@@ -358,6 +369,7 @@ def cmd_run_group(args, config: Config):
         "reconciliation": cmd_reconcile,
         "health-check": cmd_health_check,
         "pending-reconciliation": cmd_pending_reconciliation,
+        "jamf-location-cleanup": cmd_jamf_location_cleanup,
         "monthly-digest": cmd_monthly_digest,
     }
     requested = [m.strip() for m in (args.modules or "").split(",") if m.strip()]
@@ -783,6 +795,12 @@ Examples:
     pending_recon_parser.add_argument('--dry-run', '-n', action='store_true',
         help='Report what would be restored without writing')
 
+    # Jamf Location Cleanup (blank Jamf user for In-Stock/Retired machines)
+    jamf_loc_parser = subparsers.add_parser('jamf-location-cleanup',
+        help='Clear Jamf location/user for In-Stock and Retired machines')
+    jamf_loc_parser.add_argument('--dry-run', '-n', action='store_true',
+        help='Report what would be cleared without writing')
+
     # AI Audit (cross-platform LLM analysis)
     ai_audit_parser = subparsers.add_parser('ai-audit',
         help='AI-powered cross-platform audit (security, compliance, anomalies)')
@@ -870,6 +888,7 @@ Examples:
         'correction': cmd_correction,
         'health-check': cmd_health_check,
         'pending-reconciliation': cmd_pending_reconciliation,
+        'jamf-location-cleanup': cmd_jamf_location_cleanup,
         'ai-audit': cmd_ai_audit,
         'cleanup': cmd_cleanup,
         'user-enrichment': cmd_user_enrichment,

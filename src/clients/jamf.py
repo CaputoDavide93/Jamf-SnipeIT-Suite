@@ -474,7 +474,35 @@ class JamfClient:
         
         logger.error(f"Failed to update computer {computer_id}")
         return False
-    
+
+    def clear_computer_location(self, computer_id: int, dry_run: bool = False) -> bool:
+        """
+        Clear the user/location fields on a computer (username, real name, email,
+        position, room). Sends empty XML tags — unlike update_computer_location,
+        which skips empty fields. Used when a machine returns to stock/retired so
+        the enrollment profile does not re-apply the previous user's identity.
+        """
+        xml = (
+            "<computer><location>"
+            "<username></username>"
+            "<real_name></real_name>"
+            "<email_address></email_address>"
+            "<position></position>"
+            "<room></room>"
+            "</location></computer>"
+        )
+        if dry_run:
+            logger.info(f"[DRY-RUN] Would clear location fields on computer {computer_id}")
+            return True
+        response = self._request(
+            "PUT", f"/JSSResource/computers/id/{computer_id}", xml_data=xml.encode("utf-8")
+        )
+        if response and response.status_code in (200, 201):
+            logger.debug(f"Cleared location on computer {computer_id}")
+            return True
+        logger.error(f"Failed to clear location on computer {computer_id}")
+        return False
+
     def update_computer_location_and_ea(
         self,
         computer_id: int,

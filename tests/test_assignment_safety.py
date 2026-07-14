@@ -409,3 +409,54 @@ def test_pending_recon_dry_run_never_writes():
     results = module.run(dry_run=True)
     assert results["candidates"] == 1
     assert module.snipe.status_updates == []
+
+
+def _asset(serial, status):
+    return {"serial": serial, "status_label": {"name": status}}
+
+def _build_loc_cleanup(assets, jamf_locations, clear_ok=True):
+    from modules.maintenance.jamf_location_cleanup import JamfLocationCleanupModule
+    m = JamfLocationCleanupModule.__new__(JamfLocationCleanupModule)
+    m.config = SimpleNamespace()
+
+    class FakeSnipe:
+        def get_all_assets(self, *a, **k): return assets
+    class FakeJamf:
+        def __init__(self): self.cleared = []
+        def get_all_computers_basic(self):
+            return [{"serial_number": s, "id": i} for i, s in enumerate(jamf_locations, 1)]
+        def get_computer_by_id(self, cid, subsets=None):
+            serial = list(jamf_locations)[cid - 1]
+            return {"computer": {"location": jamf_locations[serial]}}
+        def clear_computer_location(self, cid, dry_run=False):
+            self.cleared.append(cid); return clear_ok
+    m.snipe = FakeSnipe(); m.jamf = FakeJamf(); m.slack = None
+    return m
+
+def test_loc_cleanup_clears_instock_with_user():
+    assets = [_asset("ABC1", "In Stock")]
+    locs = {"ABC1": {"username": "olduser", "real_name": "Old User", "email_address": "old@x.com"}}
+    m = _build_loc_cleanup(assets, locs)
+    r = m.run(dry_run=False)
+    assert r["cleared"] == 1 and m.jamf.cleared == [1]
+
+def test_loc_cleanup_skips_non_target_status():
+    assets = [_asset("ABC2", "Checked Out")]
+    locs = {"ABC2": {"username": "activeuser", "real_name": "Active"}}
+    m = _build_loc_cleanup(assets, locs)
+    r = m.run(dry_run=False)
+    assert r["cleared"] == 0 and m.jamf.cleared == []
+
+def test_loc_cleanup_skips_already_blank():
+    assets = [_asset("ABC3", "Retired")]
+    locs = {"ABC3": {"username": "", "real_name": "", "email_address": ""}}
+    m = _build_loc_cleanup(assets, locs)
+    r = m.run(dry_run=False)
+    assert r["cleared"] == 0 and r["already_blank"] == 1
+
+def test_loc_cleanup_dry_run_never_clears():
+    assets = [_asset("ABC4", "Retired")]
+    locs = {"ABC4": {"real_name": "Old User"}}
+    m = _build_loc_cleanup(assets, locs)
+    r = m.run(dry_run=True)
+    assert r["cleared"] == 1 and m.jamf.cleared == []
