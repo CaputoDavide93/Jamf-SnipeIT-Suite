@@ -23,7 +23,7 @@ locals {
       cron        = "cron(0 21 ? * SUN *)"
       description = "Sun 21:00 UTC — housekeeping (cleanup, pending-reconciliation, username-standardize, ai-audit, reconciliation)"
       run_mode    = "cli"
-      command     = ["run-group", "--modules", "cleanup,pending-reconciliation,username-standardize,ai-audit,reconciliation"]
+      command     = ["run-group", "--modules", "cleanup,pending-reconciliation,jamf-location-cleanup,username-standardize,ai-audit,reconciliation"]
     }
     health = {
       cron        = "cron(0 19 ? * MON,THU *)"
