@@ -27,7 +27,7 @@ except ImportError:
     anthropic = None
     _LLM_AVAILABLE = False
 
-_MODEL_ID = os.environ.get("AI_MODEL_ID", "claude-sonnet-4-20250514")
+_MODEL_ID = os.environ.get("AI_MODEL_ID", "claude-sonnet-5")
 _SLACK_CHANNEL = None  # Set from config
 
 
@@ -289,7 +289,12 @@ Do NOT include any explanation outside the JSON."""
                 max_tokens=4000,
                 messages=[{"role": "user", "content": prompt}],
             )
-            text = response.content[0].text.strip()
+            # Models with extended thinking return ThinkingBlock(s) before the
+            # TextBlock, so select text blocks explicitly rather than content[0].
+            text = "".join(
+                b.text for b in response.content
+                if getattr(b, "type", None) == "text"
+            ).strip()
 
             # Strip markdown code blocks
             if text.startswith("```"):

@@ -201,19 +201,23 @@ def cmd_reconcile(args, config: Config):
     print("\n🔍 Running Inventory Reconciliation...")
     print("   Comparing inventory between Jamf Pro and Snipe-IT.\n")
     
-    module = ReconciliationModule(config, dry_run=args.dry_run)
+    module = ReconciliationModule(config, dry_run=getattr(args, 'dry_run', False))
     results = module.run(
-        check_duplicates=not args.no_duplicates,
-        check_mismatches=not args.no_mismatches,
-        export_csv=args.export_csv,
-        output_dir=args.output_dir
+        check_duplicates=not getattr(args, 'no_duplicates', False),
+        check_mismatches=not getattr(args, 'no_mismatches', False),
+        export_csv=getattr(args, 'export_csv', False),
+        output_dir=getattr(args, 'output_dir', './output'),
     )
     module.print_summary()
     
-    # Return error if significant issues found
-    issues = (len(results.jamf_only) + len(results.snipe_only) + 
+    # Reconciliation is a reporting module: finding drift is expected and is
+    # surfaced above / in the export — it must not fail the run-group so the
+    # scheduled housekeeping task is not perpetually marked failed.
+    issues = (len(results.jamf_only) + len(results.snipe_only) +
               len(results.jamf_duplicates) + len(results.snipe_duplicates))
-    return 0 if issues == 0 else 1
+    if issues:
+        print(f"   Reconciliation found {issues} discrepancies (reported above).")
+    return (0, {"issues": issues})
 
 
 def cmd_azure_starters(args, config: Config):
