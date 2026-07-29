@@ -349,23 +349,27 @@ class ModelSyncModule:
             
             logger.debug(f"[{i}/{len(computers)}] Processing: {serial}")
             
+            updated = False
             try:
                 updated = self._sync_single_asset(serial, model_map, dry_run, snipe_serial_map)
                 results["total_processed"] += 1
-                
+
                 if updated:
                     results["updated"] += 1
                 else:
                     results["skipped"] += 1
-                    
+
             except Exception as e:
                 logger.error(f"Error processing {serial}: {e}")
                 results["errors"] += 1
-            
+
             progress.advance()
-            
-            # Rate limiting
-            if not dry_run and self.update_delay > 0:
+
+            # Rate limiting — only after an actual write. Machines whose model
+            # already matches issue no API call (the hardware subset is served
+            # from the check_models cache), so throttling them was pure sleep:
+            # a steady-state run spent ~2 minutes waiting on zero requests.
+            if updated and not dry_run and self.update_delay > 0:
                 rate_limit_delay(self.update_delay, "Model Sync", i, len(computers))
         
         progress.finish(extra=f"updated={results['updated']}, skipped={results['skipped']}, errors={results['errors']}")
