@@ -114,13 +114,17 @@ class HealthCheckServer:
         self.status.last_check = datetime.now().isoformat()
         self.status.custom_checks = self._run_custom_checks()
         
-        # Determine overall status
+        # Determine overall status.
+        # `and` binds tighter than the conditional expression, so the previous
+        # one-liner collapsed to `True` whenever custom_checks was empty —
+        # an unhealthy Jamf or Snipe-IT was reported as healthy.
         all_healthy = (
-            self.status.jamf_healthy and 
-            self.status.snipe_healthy and
-            all(self.status.custom_checks.values()) if self.status.custom_checks else True
+            self.status.jamf_healthy
+            and self.status.snipe_healthy
+            and all(self.status.custom_checks.values())
         )
-        
+
+
         if all_healthy:
             self.status.status = "healthy"
         elif self.status.failed_runs > self.status.successful_runs:

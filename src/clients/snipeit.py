@@ -60,7 +60,10 @@ class SnipeITClient:
         )
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
-    
+
+        # High-water mark for CF-#### asset tags, scanned lazily once.
+        self._cf_tag_high_water: Optional[int] = None
+
     def _url(self, path: str) -> str:
         """Build full URL for API endpoint."""
         # Ensure /api/v1 prefix
@@ -154,10 +157,60 @@ class SnipeITClient:
         
         return None
     
+    def _write_ok(self, response: Optional[requests.Response], what: str) -> bool:
+        """
+        Return whether a write actually succeeded.
+
+        Snipe-IT answers HTTP 200 with a ``{"status": "error"}`` body on
+        validation failures (locked asset, already checked out, bad field).
+        Treating HTTP 200 alone as success makes callers count silent
+        no-ops as completed work.
+        """
+        if response is None or response.status_code not in (200, 201):
+            return False
+        try:
+            result = response.json()
+        except ValueError:
+            return True  # empty/non-JSON body on 2xx — nothing to contradict
+        if isinstance(result, dict) and result.get("status") == "error":
+            logger.warning(
+                f"{what} returned HTTP {response.status_code} but status=error: "
+                f"{result.get('messages', '')}"
+            )
+            return False
+        return True
+
+    def _paginated_rows(
+        self,
+        path: str,
+        limit: int = 500,
+        extra_params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch every row of a paginated list endpoint (never truncates)."""
+        rows: List[Dict[str, Any]] = []
+        offset = 0
+        while True:
+            params = {"limit": limit, "offset": offset}
+            if extra_params:
+                params.update(extra_params)
+            response = self._request("GET", path, params=params)
+            if not response:
+                break
+            data = response.json()
+            page = data.get("rows", [])
+            if not page:
+                break
+            rows.extend(page)
+            total = data.get("total", 0)
+            offset += limit
+            if len(page) < limit or offset >= total:
+                break
+        return rows
+
     # =========================================================================
     # User Operations
     # =========================================================================
-    
+
     def get_all_users(self, limit: int = 500) -> List[Dict[str, Any]]:
         """
         Get all users from Snipe-IT with pagination support.
@@ -518,16 +571,25 @@ class SnipeITClient:
         return response.json().get("rows", [])
     
     def next_cf_tag(self) -> str:
-        """Return next CF-#### asset tag by scanning existing max."""
-        import re
-        max_n = 0
-        for a in self.get_all_assets() or []:
-            m = re.match(r"^CF-(\d+)$", (a.get("asset_tag") or "").strip())
-            if m:
-                n = int(m.group(1))
-                if n > max_n:
-                    max_n = n
-        return f"CF-{max_n + 1:04d}"
+        """
+        Return the next CF-#### asset tag.
+
+        The high-water mark is scanned from Snipe-IT once per client and then
+        incremented locally. Re-scanning every asset on each call meant a run
+        that created N machines paged through the whole inventory N times.
+        """
+        if self._cf_tag_high_water is None:
+            import re
+            max_n = 0
+            for a in self.get_all_assets() or []:
+                m = re.match(r"^CF-(\d+)$", (a.get("asset_tag") or "").strip())
+                if m:
+                    n = int(m.group(1))
+                    if n > max_n:
+                        max_n = n
+            self._cf_tag_high_water = max_n
+        self._cf_tag_high_water += 1
+        return f"CF-{self._cf_tag_high_water:04d}"
 
     def create_asset(
         self,
@@ -574,12 +636,17 @@ class SnipeITClient:
         logger.debug(f"Creating asset: serial={serial}, model_id={model_id}")
         
         response = self._request("POST", "/hardware", json_data=payload)
-        if not response or response.status_code not in (200, 201):
+        if not self._write_ok(response, f"create_asset {serial}"):
             logger.error(f"Failed to create asset: {serial}")
             return None
-        
+
         result = response.json()
-        asset = self._normalize_asset(result) or result
+        asset = self._normalize_asset(result)
+        if not asset or not asset.get("id"):
+            # 200 + success-looking body but no usable id — callers would
+            # otherwise carry an id-less dict into checkout and fail obscurely.
+            logger.error(f"create_asset {serial}: response contained no asset id")
+            return None
         logger.debug(f"Created asset: id={asset.get('id')}, serial={serial}")
         return asset
     
@@ -595,7 +662,7 @@ class SnipeITClient:
             True if successful
         """
         response = self._request("PATCH", f"/hardware/{asset_id}", json_data=data)
-        return response is not None and response.status_code in (200, 201)
+        return self._write_ok(response, f"update_asset {asset_id}")
     
     def update_asset_status(self, asset_id: int, status_id: int) -> bool:
         """
@@ -637,10 +704,10 @@ class SnipeITClient:
         logger.debug(f"Checking out asset {asset_id} to user {user_id}")
         
         response = self._request("POST", f"/hardware/{asset_id}/checkout", json_data=payload)
-        if response and response.status_code in (200, 201):
+        if self._write_ok(response, f"checkout_asset {asset_id}"):
             logger.debug(f"Checkout successful: asset {asset_id} -> user {user_id}")
             return True
-        
+
         logger.error(f"Checkout failed: asset {asset_id} -> user {user_id}")
         return False
     
@@ -660,10 +727,10 @@ class SnipeITClient:
         logger.debug(f"Checking in asset {asset_id}")
         
         response = self._request("POST", f"/hardware/{asset_id}/checkin", json_data=payload)
-        if response and response.status_code in (200, 201):
+        if self._write_ok(response, f"checkin_asset {asset_id}"):
             logger.debug(f"Check-in successful: asset {asset_id}")
             return True
-        
+
         logger.error(f"Check-in failed: asset {asset_id}")
         return False
     
@@ -713,12 +780,10 @@ class SnipeITClient:
             List of model dictionaries
         """
         logger.debug("Fetching all models from Snipe-IT...")
-        
-        response = self._request("GET", "/models", params={"limit": limit})
-        if not response:
-            return []
-        
-        models = response.json().get("rows", [])
+
+        # Paginated: a truncated model list makes Model Sync believe existing
+        # models are missing and try to re-create them.
+        models = self._paginated_rows("/models", limit=limit)
         logger.debug(f"Retrieved {len(models)} models")
         return models
     
@@ -787,12 +852,8 @@ class SnipeITClient:
             Dict mapping manufacturer name (lowercase) to ID
         """
         logger.debug("Fetching manufacturers from Snipe-IT...")
-        
-        response = self._request("GET", "/manufacturers", params={"limit": 500})
-        if not response:
-            return {}
-        
-        rows = response.json().get("rows", [])
+
+        rows = self._paginated_rows("/manufacturers")
         manufacturers = {
             row["name"].lower(): row["id"]
             for row in rows
@@ -840,11 +901,7 @@ class SnipeITClient:
         Returns:
             List of category dictionaries
         """
-        response = self._request("GET", "/categories", params={"limit": 500})
-        if not response:
-            return []
-        
-        return response.json().get("rows", [])
+        return self._paginated_rows("/categories")
     
     # =========================================================================
     # Utility Methods

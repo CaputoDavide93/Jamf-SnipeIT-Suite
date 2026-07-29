@@ -45,11 +45,11 @@ class PeripheralsSyncModule:
         )
         self.mapping_file = Path(mapping_path)
 
-        # HiBob credentials from config
-        hibob_creds = config._raw.get("hibob", {})
+        # HiBob credentials from the parsed config (not the raw YAML dict —
+        # env-only deployments populate the typed section, and _raw is private).
         self.hibob = HiBobClient(
-            service_user_id=hibob_creds.get("service_user_id", ""),
-            service_user_token=hibob_creds.get("service_user_token", ""),
+            service_user_id=config.hibob.service_user_id,
+            service_user_token=config.hibob.service_user_token,
             timeout=config.api.timeout_seconds,
             max_retries=config.api.max_retries,
             retry_delay=config.api.retry_delay_seconds,
@@ -62,6 +62,7 @@ class PeripheralsSyncModule:
             timeout=config.api.timeout_seconds,
             max_retries=config.api.max_retries,
             retry_delay=config.api.retry_delay_seconds,
+            rate_limit_wait=config.api.rate_limit_wait_seconds,
         )
 
         self.audit = AuditCSV(

@@ -61,11 +61,18 @@ class ReconciliationModule:
             username=config.jamf.username,
             password=config.jamf.password,
             client_id=config.jamf.client_id,
-            client_secret=config.jamf.client_secret
+            client_secret=config.jamf.client_secret,
+            timeout=config.api.timeout_seconds,
+            max_retries=config.api.max_retries,
+            retry_delay=config.api.retry_delay_seconds,
         )
         self.snipe = SnipeITClient(
             base_url=config.snipeit.base_url,
-            api_token=config.snipeit.api_token
+            api_token=config.snipeit.api_token,
+            timeout=config.api.timeout_seconds,
+            max_retries=config.api.max_retries,
+            retry_delay=config.api.retry_delay_seconds,
+            rate_limit_wait=config.api.rate_limit_wait_seconds,
         )
         self.results = ReconciliationResults()
     

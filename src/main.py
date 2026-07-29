@@ -53,9 +53,9 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> logg
 
     # Enforce simple log retention
     try:
-        from infra.helpers import remove_old_logs
+        from infra.helpers import clean_old_logs
         log_dir = os.path.dirname(log_file) if log_file else './logs'
-        remove_old_logs(log_dir, max_days=30)
+        clean_old_logs(log_dir, max_days=30)
     except Exception:
         pass
 
@@ -181,19 +181,21 @@ def cmd_wakeup(args, config: Config):
     print("   Sending MDM redeploy commands to devices.\n")
     
     module = WakeUpModule(config)
-    
-    if args.group:
-        results = module.wake_group(args.group, dry_run=args.dry_run)
-    elif args.serial:
-        results = module.wake_serial(args.serial, dry_run=args.dry_run)
-    elif args.file:
-        results = module.wake_from_file(args.file, dry_run=args.dry_run)
-    else:
-        print("❌ Error: Must specify --group, --serial, or --file")
-        return 1
-    
-    
-    return 0 if results['errors'] == 0 else 1
+
+    try:
+        if args.group:
+            results = module.wake_group(args.group, dry_run=args.dry_run)
+        elif args.serial:
+            results = module.wake_serial(args.serial, dry_run=args.dry_run)
+        elif args.file:
+            results = module.wake_from_file(args.file, dry_run=args.dry_run)
+        else:
+            print("❌ Error: Must specify --group, --serial, or --file")
+            return 1
+    finally:
+        module.close()
+
+    return 0 if results.get('failed', 0) == 0 else 1
 
 
 def cmd_reconcile(args, config: Config):
@@ -202,14 +204,18 @@ def cmd_reconcile(args, config: Config):
     print("   Comparing inventory between Jamf Pro and Snipe-IT.\n")
     
     module = ReconciliationModule(config, dry_run=getattr(args, 'dry_run', False))
-    results = module.run(
-        check_duplicates=not getattr(args, 'no_duplicates', False),
-        check_mismatches=not getattr(args, 'no_mismatches', False),
-        export_csv=getattr(args, 'export_csv', False),
-        output_dir=getattr(args, 'output_dir', './output'),
-    )
-    module.print_summary()
-    
+    try:
+        results = module.run(
+            check_duplicates=not getattr(args, 'no_duplicates', False),
+            check_mismatches=not getattr(args, 'no_mismatches', False),
+            export_csv=getattr(args, 'export_csv', False),
+            output_dir=getattr(args, 'output_dir', './output'),
+        )
+        module.print_summary()
+    finally:
+        module.close()
+
+
     # Reconciliation is a reporting module: finding drift is expected and is
     # surfaced above / in the export — it must not fail the run-group so the
     # scheduled housekeeping task is not perpetually marked failed.
@@ -226,8 +232,11 @@ def cmd_azure_starters(args, config: Config):
     print("   Syncing Azure AD starters group members to Snipe-IT users.\n")
     
     module = AzureStartersModule(config)
-    results = module.run(dry_run=args.dry_run)
-    
+    try:
+        results = module.run(dry_run=args.dry_run)
+    finally:
+        module.close()
+
     # errors can be a list or int depending on module
     errors = results.get('errors', [])
     error_count = len(errors) if isinstance(errors, list) else errors
@@ -917,7 +926,14 @@ Examples:
     handler = command_handlers.get(args.command)
     if handler:
         try:
-            return handler(args, config)
+            # Most handlers return (exit_code, results); a few return a bare
+            # int. sys.exit() only understands int/None — handing it a tuple
+            # dumps the whole results dict to stderr and exits 1, so every
+            # single-module invocation looked like a failure to ECS.
+            outcome = handler(args, config)
+            if isinstance(outcome, tuple):
+                outcome = outcome[0]
+            return 0 if outcome is None else int(outcome)
         except KeyboardInterrupt:
             print("\n\n⚠️  Operation cancelled by user")
             return 130

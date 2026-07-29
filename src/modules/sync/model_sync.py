@@ -62,6 +62,9 @@ class ModelSyncModule:
         # Caches
         self._model_map: Optional[Dict[str, int]] = None
         self._manufacturer_map: Optional[Dict[str, int]] = None
+        # serial (upper) -> Jamf hardware subset, populated by check_models so
+        # run() does not fetch every computer's detail a second time.
+        self._hardware_by_serial: Dict[str, Dict[str, Any]] = {}
     
     def _get_model_map(self) -> Dict[str, int]:
         """Get model name -> ID mapping from Snipe-IT."""
@@ -171,6 +174,11 @@ class ModelSyncModule:
                 if detail:
                     computer = detail.get("computer", {}) or {}
                     hardware = computer.get("hardware", {}) or {}
+                    # Cache by serial — run() reuses this instead of issuing a
+                    # second get_computer_by_serial per machine.
+                    serial = (comp.get("serial_number") or "").strip().upper()
+                    if serial:
+                        self._hardware_by_serial[serial] = hardware
                     model_name = hardware.get("model", "")
                     if model_name:
                         models.add(model_name)
@@ -380,13 +388,15 @@ class ModelSyncModule:
         Returns:
             True if updated
         """
-        # Get Jamf computer details
-        jamf_comp = self.jamf.get_computer_by_serial(serial)
-        if not jamf_comp:
-            logger.debug(f"No Jamf computer for serial: {serial}")
-            return False
+        # Prefer the hardware subset already fetched by check_models
+        hardware = self._hardware_by_serial.get(serial.upper())
+        if hardware is None:
+            jamf_comp = self.jamf.get_computer_by_serial(serial)
+            if not jamf_comp:
+                logger.debug(f"No Jamf computer for serial: {serial}")
+                return False
+            hardware = jamf_comp.get("hardware", {}) or {}
 
-        hardware = jamf_comp.get("hardware", {}) or {}
         model_name = hardware.get("model", "")
         model_identifier = hardware.get("model_identifier", "")
 

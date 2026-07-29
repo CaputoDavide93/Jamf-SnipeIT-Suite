@@ -29,7 +29,13 @@ except ImportError:
 
 # Model to use for resolution — configurable without a brittle static allowlist
 _MODEL_DEFAULT = "claude-haiku-4-5-20251001"
-_MODEL_ID = os.environ.get("AI_MODEL_ID", _MODEL_DEFAULT).strip() or _MODEL_DEFAULT
+# AI_RESOLVER_MODEL_ID lets this per-match resolver stay on a cheap model even
+# when AI_MODEL_ID points the AI audit at a larger one. Falls back to the
+# shared variable so existing deployments are unaffected.
+_MODEL_ID = (
+    os.environ.get("AI_RESOLVER_MODEL_ID")
+    or os.environ.get("AI_MODEL_ID", _MODEL_DEFAULT)
+).strip() or _MODEL_DEFAULT
 # Cache file (resolutions persist across runs)
 _CACHE_PATH = Path(os.environ.get("AI_CACHE_PATH", "/app/output/ai_cache.json"))
 # S3 cache bucket/key — when set, cache syncs to S3 (survives Fargate restarts)
@@ -37,6 +43,21 @@ _CACHE_S3_BUCKET = os.environ.get("AI_CACHE_S3_BUCKET", "")
 _CACHE_S3_KEY = os.environ.get("AI_CACHE_S3_KEY", "ai-resolver-cache.json")
 # Cache TTL: re-ask AI every 30 days
 _CACHE_TTL_DAYS = 30
+
+
+def _extract_text(response) -> str:
+    """
+    Join the text blocks of an Anthropic response.
+
+    Models with extended thinking return one or more ThinkingBlocks before the
+    TextBlock, so ``content[0].text`` raises AttributeError. AI_MODEL_ID is
+    shared with the AI audit module, so a thinking-capable model configured
+    there silently killed AI matching here too.
+    """
+    return "".join(
+        b.text for b in getattr(response, "content", []) or []
+        if getattr(b, "type", None) == "text"
+    ).strip()
 
 
 class AIResolver:
@@ -275,7 +296,7 @@ If you truly cannot determine the correct match, respond:
                 messages=[{"role": "user", "content": prompt}],
             )
 
-            text = response.content[0].text.strip()
+            text = _extract_text(response)
             # Strip markdown code blocks if present (```json ... ```)
             if text.startswith("```"):
                 text = text.split("\n", 1)[-1]  # remove first line (```json)
@@ -460,12 +481,12 @@ Set "match" to null and "confidence" to "none" if no confident match can be made
                 return None
 
             response = client.messages.create(
-                model=_MODEL_ID,
+                model=self._model_id,
                 max_tokens=300,
                 messages=[{"role": "user", "content": prompt}],
             )
 
-            text = response.content[0].text.strip()
+            text = _extract_text(response)
             if text.startswith("```"):
                 text = text.split("\n", 1)[-1]
                 if text.endswith("```"):

@@ -19,7 +19,7 @@ owners who cannot be confirmed active are left untouched for manual review.
 Posts a single Slack summary. Silent if nothing to do.
 """
 import logging
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from core.config import Config
 from core.client_factory import create_snipeit_client, create_slack_client, create_azure_client
@@ -101,7 +101,10 @@ class PendingReconciliationModule:
                 continue
 
             results["candidates"] += 1
-            if self._restore(asset, at, pending_id, deployed_id, dry_run, results):
+            outcome = self._restore(asset, at, pending_id, deployed_id, dry_run, results)
+            if outcome is None:
+                continue  # re-verification said there was nothing to do
+            if outcome:
                 results["restored"] += 1
             else:
                 results["failures"] += 1
@@ -110,8 +113,12 @@ class PendingReconciliationModule:
         return results
 
     # ------------------------------------------------------------------
-    def _restore(self, asset, assigned, pending_id, deployed_id, dry_run, results) -> bool:
-        """Re-verify then flip Pending -> Deployed (assignment is preserved)."""
+    def _restore(self, asset, assigned, pending_id, deployed_id, dry_run, results) -> Optional[bool]:
+        """Re-verify then flip Pending -> Deployed (assignment is preserved).
+
+        Returns True on restore, False on failure, and None when
+        re-verification found nothing to do (neither restored nor failed).
+        """
         asset_id = asset.get("id")
         label = asset.get("serial") or asset.get("asset_tag") or asset_id
         owner_id = assigned.get("id")
@@ -131,11 +138,11 @@ class PendingReconciliationModule:
         if status_id != pending_id:
             logger.info(f"  Asset {label} no longer Pending — skipping")
             results["candidates"] -= 1
-            return True  # not a failure; nothing to do
+            return None  # not a failure; nothing to do
         if self.snipe.get_assigned_user_id(current) != int(owner_id):
             logger.info(f"  Asset {label} now assigned elsewhere — skipping")
             results["candidates"] -= 1
-            return True
+            return None
 
         detail = {"asset_id": asset_id, "serial": asset.get("serial"), "owner": owner_name}
         results["details"].append(detail)
