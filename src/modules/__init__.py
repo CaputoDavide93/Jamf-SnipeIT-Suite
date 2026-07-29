@@ -25,6 +25,10 @@ from .maintenance import (
     ReconciliationModule, ReconciliationResults, run_reconciliation,
     CleanupModule, run_cleanup,
     UsernameStandardizer, run_username_standardize,
+    AIAuditModule, run_ai_audit,
+    HealthCheckModule, run_health_check,
+    PendingReconciliationModule, run_pending_reconciliation,
+    JamfLocationCleanupModule, run_jamf_location_cleanup,
 )
 
 __all__ = [
@@ -44,4 +48,8 @@ __all__ = [
     "ReconciliationModule", "ReconciliationResults", "run_reconciliation",
     "CleanupModule", "run_cleanup",
     "UsernameStandardizer", "run_username_standardize",
+    "AIAuditModule", "run_ai_audit",
+    "HealthCheckModule", "run_health_check",
+    "PendingReconciliationModule", "run_pending_reconciliation",
+    "JamfLocationCleanupModule", "run_jamf_location_cleanup",
 ]

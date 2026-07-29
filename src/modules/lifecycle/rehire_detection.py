@@ -219,6 +219,7 @@ class RehireDetectionModule:
             timeout=self.config.api.timeout_seconds,
             max_retries=self.config.api.max_retries,
             retry_delay=self.config.api.retry_delay_seconds,
+            base_url=hb.base_url,
         )
         try:
             employees = client.search_employees(

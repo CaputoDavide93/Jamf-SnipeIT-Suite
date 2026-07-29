@@ -53,6 +53,7 @@ class PeripheralsSyncModule:
             timeout=config.api.timeout_seconds,
             max_retries=config.api.max_retries,
             retry_delay=config.api.retry_delay_seconds,
+            base_url=config.hibob.base_url,
         )
 
         # Snipe-IT client (reuse existing one)

@@ -133,11 +133,24 @@ class SnipeITClient:
                     logger.debug(f"404 Not Found for {url} — resource does not exist")
                     return None
                 
-                # Handle other errors (retry-able)
-                if response.status_code >= 400:
-                    # Truncate and sanitize — response body may contain reflected credentials
-                    safe_body = "[REDACTED]"
-                    logger.error(f"API error {response.status_code}: {safe_body}")
+                # 4xx other than 429 is the caller's fault (validation, auth,
+                # permissions) — retrying cannot help and only adds backoff
+                # delay. Surface the API's own messages so the failure is
+                # diagnosable; the body is scrubbed of anything token-shaped
+                # rather than blanked entirely.
+                if 400 <= response.status_code < 500:
+                    logger.error(
+                        f"API error {response.status_code} for {method} {path}: "
+                        f"{self._safe_error_body(response)}"
+                    )
+                    return None
+
+                # 5xx — transient, worth retrying
+                if response.status_code >= 500:
+                    logger.error(
+                        f"API error {response.status_code} for {method} {path}: "
+                        f"{self._safe_error_body(response)}"
+                    )
                     if attempt < self.max_retries:
                         delay = self.retry_delay * (2 ** (attempt - 1))
                         time.sleep(delay)
@@ -157,6 +170,38 @@ class SnipeITClient:
         
         return None
     
+    def _safe_error_body(self, response: requests.Response, limit: int = 400) -> str:
+        """
+        Truncated error body with credential-shaped values removed.
+
+        Snipe-IT error bodies carry the field-level validation messages needed
+        to diagnose a failure, but a reflected request can echo the API token,
+        so token/password/secret keys are redacted before logging.
+        """
+        try:
+            payload = response.json()
+        except ValueError:
+            return (response.text or "")[:limit]
+
+        def _scrub(obj: Any) -> Any:
+            if isinstance(obj, dict):
+                return {
+                    k: ("[REDACTED]"
+                        if any(s in str(k).lower()
+                               for s in ("token", "password", "secret", "authorization"))
+                        else _scrub(v))
+                    for k, v in obj.items()
+                }
+            if isinstance(obj, list):
+                return [_scrub(v) for v in obj]
+            return obj
+
+        try:
+            import json as _json
+            return _json.dumps(_scrub(payload))[:limit]
+        except Exception:
+            return "[unserialisable body]"
+
     def _write_ok(self, response: Optional[requests.Response], what: str) -> bool:
         """
         Return whether a write actually succeeded.
@@ -222,31 +267,8 @@ class SnipeITClient:
             List of all user dictionaries
         """
         logger.debug("Fetching all users from Snipe-IT...")
-        
-        all_users: List[Dict[str, Any]] = []
-        offset = 0
-        
-        while True:
-            response = self._request("GET", "/users", params={"limit": limit, "offset": offset})
-            if not response:
-                break
-            
-            data = response.json()
-            users = data.get("rows", [])
-            total = data.get("total", 0)
-            
-            if not users:
-                break
-            
-            all_users.extend(users)
-            offset += len(users)
-            
-            logger.debug(f"Fetched {len(all_users)}/{total} users")
-            
-            # Check if we've fetched all users
-            if len(all_users) >= total or len(users) < limit:
-                break
-        
+
+        all_users = self._paginated_rows("/users", limit=limit)
         logger.debug(f"Retrieved {len(all_users)} users total")
         return all_users
 
@@ -496,30 +518,11 @@ class SnipeITClient:
         Returns:
             List of all asset dictionaries
         """
-        all_assets = []
-        offset = 0
-        
-        while True:
-            response = self._request(
-                "GET", 
-                "/hardware",
-                params={"limit": limit, "offset": offset, "sort": "id", "order": "asc"}
-            )
-            if not response:
-                break
-            
-            data = response.json()
-            rows = data.get("rows", [])
-            all_assets.extend(rows)
-            
-            total = data.get("total", 0)
-            offset += limit
-            
-            logger.debug(f"Fetched {len(all_assets)}/{total} assets")
-            
-            if offset >= total or not rows:
-                break
-        
+        all_assets = self._paginated_rows(
+            "/hardware",
+            limit=limit,
+            extra_params={"sort": "id", "order": "asc"},
+        )
         logger.debug(f"Retrieved {len(all_assets)} total assets from Snipe-IT")
         return all_assets
     
@@ -957,24 +960,10 @@ class SnipeITClient:
             {lowercase_name: accessory_dict}
         """
         accessories: Dict[str, Dict[str, Any]] = {}
-        offset = 0
-
-        while True:
-            response = self._request(
-                "GET", "/accessories",
-                params={"limit": limit, "offset": offset},
-            )
-            if not response:
-                break
-            data = response.json()
-            for acc in data.get("rows", []):
-                name = (acc.get("name") or "").lower()
-                if name:
-                    accessories[name] = acc
-            total = data.get("total", 0)
-            offset += limit
-            if offset >= total or not data.get("rows"):
-                break
+        for acc in self._paginated_rows("/accessories", limit=limit):
+            name = (acc.get("name") or "").lower()
+            if name:
+                accessories[name] = acc
 
         logger.debug(f"Retrieved {len(accessories)} accessories from Snipe-IT")
         return accessories

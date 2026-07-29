@@ -63,6 +63,23 @@ class UserMatchModule:
         )
         self._dry_run = False
         self._dry_run_created_users_by_email: Dict[str, Dict[str, Any]] = {}
+        # serial (upper) -> Snipe-IT asset, built once per run
+        self._serial_map: Optional[Dict[str, Dict[str, Any]]] = None
+
+    def _get_serial_map(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Lazily build the serial -> asset index.
+
+        Replaces a per-device get_asset_by_serial call (one or two HTTP
+        requests each) with a single bulk fetch. Assets created during the run
+        are added to the map, and every mutation still re-reads the asset by
+        id first, so nothing acts on stale list data.
+        """
+        if self._serial_map is None:
+            logger.info("Building Snipe-IT serial → asset map...")
+            self._serial_map = self.snipe.get_assets_by_serial_map()
+            logger.info(f"Loaded {len(self._serial_map)} Snipe-IT assets")
+        return self._serial_map
     
     def _load_model_map(self, path: Optional[str]) -> Dict[str, int]:
         """Load model identifier to Snipe model ID mapping."""
@@ -588,8 +605,8 @@ class UserMatchModule:
                     )
                 })
         
-        # Find or create asset
-        asset = self.snipe.get_asset_by_serial(serial)
+        # Find or create asset (bulk serial index, not a per-device lookup)
+        asset = self._get_serial_map().get(serial.upper())
         action = "none"
         
         if asset:
@@ -663,6 +680,8 @@ class UserMatchModule:
             
             if asset:
                 results["assets_created"] += 1
+                # Keep the index consistent for the rest of the run
+                self._get_serial_map()[serial.upper()] = asset
                 logger.info(f"Created Snipe asset: id={asset.get('id')}")
             else:
                 logger.error(f"Failed to create asset for serial {serial}")

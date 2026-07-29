@@ -35,10 +35,14 @@ class HiBobClient:
         timeout: int = 30,
         max_retries: int = 3,
         retry_delay: int = 5,
+        base_url: str = "",
     ):
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        # hibob.base_url was configurable but never reached the client, so the
+        # class constant always won. Honour it, falling back to the constant.
+        self.api_base = (base_url or self.API_BASE).rstrip("/")
 
         creds = f"{service_user_id}:{service_user_token}"
         encoded = base64.b64encode(creds.encode()).decode()
@@ -63,7 +67,7 @@ class HiBobClient:
         json_data: Optional[Dict] = None,
     ) -> Optional[requests.Response]:
         """Make an API request with retries."""
-        url = f"{self.API_BASE}{path}"
+        url = f"{self.api_base}{path}"
 
         for attempt in range(self.max_retries + 1):
             try:

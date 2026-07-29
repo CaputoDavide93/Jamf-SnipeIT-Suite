@@ -124,7 +124,7 @@ flowchart LR
 ### CLI command inventory
 
 <!-- AUTOGEN:modules -->
-_20 CLI commands, generated from `src/main.py` by `tools/gen_modules_doc.py` — do not edit by hand._
+_22 CLI commands, generated from `src/main.py` by `tools/gen_modules_doc.py` — do not edit by hand._
 
 | Command | What it does | Scheduler default (cron) |
 |---------|--------------|---------------------------|
@@ -139,6 +139,8 @@ _20 CLI commands, generated from `src/main.py` by `tools/gen_modules_doc.py` —
 | `azure-starters` | Sync Azure AD starters group members to Snipe-IT users | `0 6 * * 1` |
 | `correction` | Detect and fix wrong asset assignments from previous runs | `0 8 * * *` |
 | `health-check` | Scan for stuck/inconsistent states and report to Slack | `0 9 * * *` |
+| `pending-reconciliation` | Restore Pending assets whose owner is active again (Azure AD confirmed) | — |
+| `jamf-location-cleanup` | Clear Jamf location/user for In-Stock and Retired machines | — |
 | `ai-audit` | AI-powered cross-platform audit (security, compliance, anomalies) | `0 4 * * 0` |
 | `cleanup` | Merge duplicate users and remove junk accounts | `0 3 * * 0` |
 | `user-enrichment` | Push Azure AD fields (job title, dept) to Snipe-IT | `30 6 * * 1` |

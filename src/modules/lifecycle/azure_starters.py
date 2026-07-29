@@ -217,10 +217,12 @@ class AzureStartersModule:
         surname = azure_user.get("surname", "")
         job_title = azure_user.get("jobTitle", "") or ""
         
-        # Derive first/last name if not provided
+        # Derive first/last name if not provided.
+        # `a or b if parts else ""` parses as `(a or b) if parts else ""`, so
+        # an empty parts list would have discarded a real given_name.
         if not given_name or not surname:
             parts = display_name.split(" ", 1)
-            given_name = given_name or parts[0] if parts else ""
+            given_name = given_name or (parts[0] if parts else "")
             surname = surname or (parts[1] if len(parts) > 1 else "")
         
         # Extract username from email (part before @)
@@ -290,6 +292,9 @@ class AzureStartersModule:
                         })
                     else:
                         logger.warning(f"Failed to update job title for {display_name}")
+                        results["errors"].append(
+                            f"Update {display_name}: job title write rejected"
+                        )
                 except Exception as e:
                     logger.error(f"Error updating user {display_name}: {e}")
                     results["errors"].append(f"Update {display_name}: {str(e)}")
