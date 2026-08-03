@@ -602,3 +602,57 @@ def test_fuzzy_reason_still_refused():
     assert can_auto_reassign(
         "fuzzy", current_inactive=True, target_inactive=False
     ) is False
+
+
+def test_jamf_update_not_needed_when_ea_and_location_already_match():
+    """
+    _jamf_update_needed must return False for an already-synced device.
+    It only can if the caller supplies extension_attributes — the default
+    get_computer_by_id subset list omits them, which made this always True
+    and rewrote every device every run.
+    """
+    from modules.sync.user_match import UserMatchModule
+
+    location = {
+        "username": "meganwilkie",
+        "real_name": "Megan Macdougall",
+        "email_address": "megan.macdougall@createfuture.com",
+        "position": "Engineer",
+    }
+    eas = [
+        {"name": "Slack Source", "value": "App Store"},
+        {"name": "SnipeIT_Asset_ID", "value": "2127"},
+    ]
+    assert UserMatchModule._jamf_update_needed(
+        location, eas,
+        username="meganwilkie", realname="Megan Macdougall",
+        email="megan.macdougall@createfuture.com", position="Engineer",
+        ea_name="SnipeIT_Asset_ID", ea_value="2127",
+    ) is False
+
+
+def test_jamf_update_needed_when_extension_attributes_absent():
+    """Reproduces the bug: no EA data means it cannot prove a match."""
+    from modules.sync.user_match import UserMatchModule
+
+    location = {
+        "username": "meganwilkie",
+        "real_name": "Megan Macdougall",
+        "email_address": "megan.macdougall@createfuture.com",
+        "position": "Engineer",
+    }
+    assert UserMatchModule._jamf_update_needed(
+        location, [],
+        username="meganwilkie", realname="Megan Macdougall",
+        email="megan.macdougall@createfuture.com", position="Engineer",
+        ea_name="SnipeIT_Asset_ID", ea_value="2127",
+    ) is True
+
+
+def test_user_match_requests_extension_attributes_subset():
+    """The detail fetch must ask for the subset the EA comparison needs."""
+    import inspect
+    from modules.sync.user_match import UserMatchModule
+
+    source = inspect.getsource(UserMatchModule._process_device)
+    assert "ExtensionAttributes" in source

@@ -435,7 +435,15 @@ class UserMatchModule:
         hostname = comp_brief.get("name") or comp_brief.get("computer_name") or ""
         
         # Get full computer details
-        detail = self.jamf.get_computer_by_id(comp_id)
+        # ExtensionAttributes is required: _jamf_update_needed compares the
+        # SnipeIT_Asset_ID EA, and the default subset list omits it. Without it
+        # the EA loop saw an empty list, fell through to "update needed", and
+        # rewrote the location + EA of every matched device on every run
+        # (511 of 559 devices, three runs running).
+        detail = self.jamf.get_computer_by_id(
+            comp_id,
+            subsets=["General", "Location", "Hardware", "GroupsAccounts", "ExtensionAttributes"],
+        )
         if not detail:
             logger.warning(f"Could not fetch details for computer {comp_id}")
             results["skipped"] += 1

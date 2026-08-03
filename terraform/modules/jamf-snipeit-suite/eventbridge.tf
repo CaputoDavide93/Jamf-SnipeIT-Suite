@@ -20,10 +20,14 @@ locals {
       command     = ["run-group", "--modules", "azure-starters,user-enrichment,peripherals-sync"]
     }
     housekeeping = {
-      cron        = "cron(0 21 ? * SUN *)"
-      description = "Sun 21:00 UTC — housekeeping (cleanup, pending-reconciliation, username-standardize, ai-audit, reconciliation)"
+      cron = "cron(0 21 ? * SUN *)"
+      # username-standardize dropped 2026-08-03: it was a one-time migration
+      # and has reported 807/807 usernames already plain for three consecutive
+      # runs, so it only spends a full user fetch to do nothing. Still
+      # available on demand via `run-group --modules username-standardize`.
+      description = "Sun 21:00 UTC — housekeeping (cleanup, pending-reconciliation, jamf-location-cleanup, ai-audit, reconciliation)"
       run_mode    = "cli"
-      command     = ["run-group", "--modules", "cleanup,pending-reconciliation,jamf-location-cleanup,username-standardize,ai-audit,reconciliation"]
+      command     = ["run-group", "--modules", "cleanup,pending-reconciliation,jamf-location-cleanup,ai-audit,reconciliation"]
     }
     health = {
       cron        = "cron(0 19 ? * MON,THU *)"

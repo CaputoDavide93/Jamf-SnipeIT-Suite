@@ -251,10 +251,22 @@ right CLI subcommand or `run-group`.
 | `…-starters`     | Mon 05:50  | Mon 06:50 BST | azure-starters → user-enrichment → peripherals-sync |
 | `…-sync`         | Tue 17:00  | Tue 18:00 BST | run-once: model-sync, correction, user-match, snipe-to-jamf, leavers (+ starters/enrichment/peripherals re-run) |
 | `…-health`       | Mon+Thu 19:00 | 20:00 BST | health-check |
-| `…-housekeeping` | Sun 21:00  | Sun 22:00 BST | cleanup → username-standardize → ai-audit → reconciliation |
+| `…-housekeeping` | Sun 21:00  | Sun 22:00 BST | cleanup → pending-reconciliation → jamf-location-cleanup → ai-audit → reconciliation |
 | `…-monthly-digest` | First Mon 09:00 | 10:00 BST | monthly-digest |
 
 `wakeup` is intentionally manual — invoke via CLI or interactive menu.
+
+`username-standardize` was removed from the housekeeping chain on 2026-08-03:
+it is a completed one-time migration and reported 807/807 usernames already
+plain for three consecutive runs, so it only cost a full user fetch to do
+nothing. Run it on demand if email-style usernames reappear:
+
+```bash
+aws ecs run-task --cluster jamf-snipeit-suite-prod \
+  --task-definition jamf-snipeit-suite-prod --launch-type FARGATE \
+  --overrides '{"containerOverrides":[{"name":"app","command":["run-group","--modules","username-standardize"],"environment":[{"name":"RUN_MODE","value":"cli"}]}]}' \
+  --network-configuration "$NETWORK_CONFIG"
+```
 
 Group rules use the new CLI subcommand `run-group --modules a,b,c` which
 serialises modules under `RunMutex` so two rules firing close together can't
