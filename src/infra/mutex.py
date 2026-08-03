@@ -11,6 +11,7 @@ import socket
 import time
 import threading
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
