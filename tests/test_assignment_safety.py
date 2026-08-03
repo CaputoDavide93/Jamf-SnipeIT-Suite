@@ -575,3 +575,30 @@ def test_loc_cleanup_dry_run_never_clears():
     m = _build_loc_cleanup(assets, locs)
     r = m.run(dry_run=True)
     assert r["cleared"] == 1 and m.jamf.cleared == []
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the 2026-08-03 production run
+# ---------------------------------------------------------------------------
+
+def test_missing_match_reason_never_authorises_reassignment():
+    """
+    best_match() always sets exact_hit_reason, using None for fuzzy hits, so
+    dict.get's default never fires and callers passed None straight in. This
+    used to raise AttributeError inside the safety gate.
+    """
+    assert can_auto_reassign(
+        None, current_inactive=True, target_inactive=False
+    ) is False
+    assert can_auto_reassign(
+        "", current_inactive=True, target_inactive=False
+    ) is False
+    assert can_auto_reassign(
+        None, current_inactive=False, target_inactive=False
+    ) is False
+
+
+def test_fuzzy_reason_still_refused():
+    assert can_auto_reassign(
+        "fuzzy", current_inactive=True, target_inactive=False
+    ) is False

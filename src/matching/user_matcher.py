@@ -24,14 +24,21 @@ def is_exact_match_reason(match_reason: str) -> bool:
 
 
 def can_auto_reassign(
-    match_reason: str,
+    match_reason: Optional[str],
     *,
     current_inactive: bool,
     target_inactive: bool,
     allow_reassignment: bool = True,
 ) -> bool:
-    """Apply the shared safety policy for automated assignment changes."""
+    """Apply the shared safety policy for automated assignment changes.
+
+    A missing reason means the match was not deterministic, so it must never
+    authorise a reassignment. This is a safety gate — it cannot assume callers
+    normalised their input, and one that passed None used to raise here.
+    """
     if not allow_reassignment or target_inactive:
+        return False
+    if not match_reason:
         return False
     if is_exact_match_reason(match_reason):
         return True

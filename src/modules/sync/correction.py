@@ -417,7 +417,11 @@ class CorrectionModule:
             logger.warning("Fresh match for asset %s has no valid user id", asset_id)
             return
         expected_user_name = fresh_match.get("name", "")
-        match_reason = debug_info.get("exact_hit_reason", "fuzzy")
+        # best_match() always initialises "exact_hit_reason", setting it to None
+        # for fuzzy hits, so dict.get's default never fires — coalesce on the
+        # value instead. Passing None on to can_auto_reassign raised
+        # AttributeError and aborted validation for the asset.
+        match_reason = debug_info.get("exact_hit_reason") or "fuzzy"
 
         # ---- Compare ----
         if current_uid == expected_uid:
@@ -513,11 +517,76 @@ class CorrectionModule:
             return
 
         # ---- Correct the assignment ----
+        # Snipe-IT only allows checkout to a status label flagged deployable.
+        # Correction validates Pending assets when the current owner is
+        # inactive, and Pending is not deployable — so checking in first left
+        # the asset un-assignable and the rollback checkout failed for the very
+        # same reason, stranding it unassigned. Move the status to Deployed
+        # BEFORE breaking the existing assignment, and put it back if anything
+        # downstream fails.
+        original_status_id = status_id(asset.get("status_label"))
+        deployed_id = self.config.snipeit.status_deployed_id
+        status_changed = False
+        if original_status_id is not None and original_status_id != deployed_id:
+            if self.snipe.update_asset_status(asset_id, deployed_id):
+                status_changed = True
+                logger.info(
+                    "Asset %s status %s -> %s so it can be checked out",
+                    asset_id,
+                    original_status_id,
+                    deployed_id,
+                )
+            else:
+                logger.error(
+                    "Correction aborted for asset %s: could not make status %s "
+                    "deployable, and checking in would leave it unassignable",
+                    asset_id,
+                    original_status_id,
+                )
+                results["errors"] += 1
+                results["details"].append({
+                    "type": "mismatch",
+                    "description": (
+                        f"{mismatch_desc}\n      *Action failed:* could not set a "
+                        f"deployable status — assignment left untouched"
+                    ),
+                })
+                audit.write(
+                    serial=serial,
+                    asset_id=str(asset_id),
+                    asset_name=asset_name,
+                    current_user_id=str(current_uid),
+                    current_user_name=current_user_name,
+                    expected_user_id=str(expected_uid),
+                    expected_user_name=expected_user_name,
+                    jamf_username=primary_username,
+                    match_reason=match_reason,
+                    action="correct",
+                    result="error",
+                    notes="Status not deployable; skipped to avoid orphaning",
+                )
+                return
+
+        def _restore_status() -> None:
+            """Put a non-deployable status back after a failed correction."""
+            if status_changed and original_status_id is not None:
+                if self.snipe.update_asset_status(asset_id, original_status_id):
+                    logger.info(
+                        "Restored asset %s status to %s", asset_id, original_status_id
+                    )
+                else:
+                    logger.error(
+                        "Could not restore asset %s status to %s",
+                        asset_id,
+                        original_status_id,
+                    )
+
         # Check-in first, then checkout to the correct user
         checkin_ok = self.snipe.checkin_asset(
             asset_id, note="Self-healing correction: wrong user assignment detected"
         )
         if not checkin_ok:
+            _restore_status()
             logger.error(f"Correction failed: could not check-in asset {asset_id}")
             results["errors"] += 1
             results["details"].append({
@@ -606,6 +675,7 @@ class CorrectionModule:
         )
         if rollback_ok:
             logger.info(f"Rollback successful: asset {asset_id} back to user {current_uid}")
+            _restore_status()
             failure_note = "Checkout failed; original assignment restored"
             results["details"].append({
                 "type": "mismatch",
