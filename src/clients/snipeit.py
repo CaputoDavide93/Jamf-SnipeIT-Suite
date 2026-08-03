@@ -246,9 +246,9 @@ class SnipeITClient:
             if not page:
                 break
             rows.extend(page)
-            total = data.get("total", 0)
+            total = data.get("total")
             offset += limit
-            if len(page) < limit or offset >= total:
+            if len(page) < limit or (total is not None and offset >= int(total)):
                 break
         return rows
 
@@ -371,15 +371,8 @@ class SnipeITClient:
         Returns:
             List of asset dictionaries assigned to this user
         """
-        response = self._request("GET", f"/users/{user_id}/assets")
-        if not response:
-            return []
-        
-        data = response.json()
-        rows = data.get("rows", [])
-        total = data.get("total", 0)
-        
-        logger.debug(f"Found {len(rows)}/{total} assets for user {user_id}")
+        rows = self._paginated_rows(f"/users/{user_id}/assets")
+        logger.debug(f"Found {len(rows)} assets for user {user_id}")
         return rows
     
     def update_user(self, user_id: int, data: Dict[str, Any]) -> bool:
@@ -990,13 +983,10 @@ class SnipeITClient:
 
     def get_accessory_checkouts(self, accessory_id: int, limit: int = 500) -> List[Dict[str, Any]]:
         """Get all users who have a specific accessory checked out."""
-        response = self._request(
-            "GET", f"/accessories/{accessory_id}/checkedout",
-            params={"limit": limit},
+        return self._paginated_rows(
+            f"/accessories/{accessory_id}/checkedout",
+            limit=limit,
         )
-        if not response or response.status_code != 200:
-            return []
-        return response.json().get("rows", [])
 
     def checkout_accessory(
         self,

@@ -236,7 +236,85 @@ class AIAuditModule:
         snipe_serials = {(a.get("serial") or "").upper() for a in data.get("snipe_assets", [])}
         jamf_only = [d for d in data.get("jamf_devices", []) if (d.get("serial_number") or "").upper() not in snipe_serials]
 
-        # Build the prompt with real data
+        allow_external_pii = bool(
+            self.config.modules.get("ai_audit", {}).get("allow_external_pii", False)
+        )
+        user_tokens: Dict[str, str] = {}
+        device_tokens: Dict[str, str] = {}
+
+        def token(mapping: Dict[str, str], value: Any, prefix: str) -> str:
+            key = str(value or "unknown")
+            if key not in mapping:
+                mapping[key] = f"{prefix}-{len(mapping) + 1:04d}"
+            return mapping[key]
+
+        def user_identity(profile: Dict[str, Any]) -> Dict[str, Any]:
+            if allow_external_pii:
+                return {"name": profile["name"], "email": profile["email"]}
+            identity = profile.get("email") or profile.get("snipe_id") or profile.get("name")
+            return {"user_ref": token(user_tokens, identity, "user")}
+
+        def device_ref(serial: Any, fallback: Any = None) -> str:
+            if allow_external_pii:
+                return str(serial or fallback or "?")
+            return token(device_tokens, serial or fallback, "device")
+
+        multi_asset_payload = [
+            {
+                **user_identity(profile),
+                "assets": profile["asset_count"],
+                "devices": [
+                    f"{device_ref(asset['serial'])} ({asset['status']})"
+                    for asset in profile["snipe_assets"]
+                ],
+            }
+            for profile in multi_asset_users[:15]
+        ]
+        disabled_not_snipe_payload = [
+            {**user_identity(profile), "assets": profile["asset_count"]}
+            for profile in disabled_azure_not_snipe[:20]
+        ]
+        disabled_assets_payload = [
+            {
+                **user_identity(profile),
+                "assets": [
+                    f"{device_ref(asset['serial'])} ({asset['status']})"
+                    for asset in profile["snipe_assets"]
+                ],
+            }
+            for profile in disabled_with_assets[:15]
+        ]
+        leavers_payload = [
+            user_identity(profile) for profile in leavers_not_disabled[:20]
+        ]
+        jamf_only_payload = [
+            {"device_ref": device_ref(device.get("serial_number"), device.get("id"))}
+            for device in jamf_only[:20]
+        ]
+        orphan_payload = [
+            {
+                "device_ref": device_ref(asset.get("serial"), asset.get("id")),
+                "status": asset.get("status_label", {}).get("name", "?"),
+            }
+            for asset in orphan_assets[:15]
+        ]
+
+        if allow_external_pii:
+            logger.warning("AI Audit: external PII transfer explicitly enabled")
+        else:
+            logger.info("AI Audit: external payload identifiers tokenized")
+
+        # Reverse map so findings can be rendered with real identifiers for
+        # internal consumers (Slack, logs). Tokenisation protects the outbound
+        # prompt; without this the report reads "user-0007 has 4 assets" and
+        # nobody can act on it.
+        detokenize = {
+            tok: real
+            for mapping in (user_tokens, device_tokens)
+            for real, tok in mapping.items()
+        }
+
+        # Build the prompt with tokenized data unless raw identifiers were approved.
         prompt = f"""You are an IT asset management auditor. Analyse the following cross-platform data and identify issues that need attention.
 
 ## Platform Summary
@@ -247,22 +325,22 @@ class AIAuditModule:
 ## Issues Found (pre-computed)
 
 ### Users with 3+ assets ({len(multi_asset_users)})
-{json.dumps([{"name": p["name"], "email": p["email"], "assets": p["asset_count"], "devices": [a["serial"] + " (" + a["status"] + ")" for a in p["snipe_assets"]]} for p in multi_asset_users[:15]], indent=2)}
+{json.dumps(multi_asset_payload, indent=2)}
 
 ### Disabled in Azure but NOT marked [Disabled] in Snipe-IT ({len(disabled_azure_not_snipe)})
-{json.dumps([{"name": p["name"], "email": p["email"], "assets": p["asset_count"]} for p in disabled_azure_not_snipe[:20]], indent=2)}
+{json.dumps(disabled_not_snipe_payload, indent=2)}
 
 ### Disabled in Azure but assets NOT Pending ({len(disabled_with_assets)})
-{json.dumps([{"name": p["name"], "email": p["email"], "assets": [a["serial"] + " (" + a["status"] + ")" for a in p["snipe_assets"]]} for p in disabled_with_assets[:15]], indent=2)}
+{json.dumps(disabled_assets_payload, indent=2)}
 
 ### Leavers in Azure but not tagged in Snipe-IT ({len(leavers_not_disabled)})
-{json.dumps([{"name": p["name"], "email": p["email"]} for p in leavers_not_disabled[:20]], indent=2)}
+{json.dumps(leavers_payload, indent=2)}
 
 ### Devices in Jamf but NOT in Snipe-IT ({len(jamf_only)})
-{json.dumps([{"serial": d.get("serial_number", "?"), "id": d.get("id")} for d in jamf_only[:20]], indent=2)}
+{json.dumps(jamf_only_payload, indent=2)}
 
 ### Unassigned assets (not Pending) ({len(orphan_assets)})
-{json.dumps([{"serial": a.get("serial", "?"), "name": a.get("name", "?"), "status": a.get("status_label", {}).get("name", "?")} for a in orphan_assets[:15]], indent=2)}
+{json.dumps(orphan_payload, indent=2)}
 
 ## Instructions
 Analyse ALL the issues above and produce a JSON array of findings. For each finding:
@@ -305,7 +383,7 @@ Do NOT include any explanation outside the JSON."""
 
             findings = json.loads(text)
             if isinstance(findings, list):
-                return findings
+                return [self._detokenize_finding(f, detokenize) for f in findings]
             return []
 
         except json.JSONDecodeError as e:
@@ -314,6 +392,22 @@ Do NOT include any explanation outside the JSON."""
         except Exception as e:
             logger.error(f"AI audit error: {e}")
             return []
+
+    @staticmethod
+    def _detokenize_finding(finding: Any, lookup: Dict[str, str]) -> Any:
+        """Swap placeholder refs back to real identifiers in a finding."""
+        if not lookup or not isinstance(finding, dict):
+            return finding
+        # Longest tokens first so "user-1" cannot clobber "user-10".
+        ordered = sorted(lookup.items(), key=lambda kv: len(kv[0]), reverse=True)
+        restored: Dict[str, Any] = {}
+        for key, value in finding.items():
+            if isinstance(value, str):
+                for tok, real in ordered:
+                    if tok in value:
+                        value = value.replace(tok, real)
+            restored[key] = value
+        return restored
 
     # ------------------------------------------------------------------
     # Slack Report

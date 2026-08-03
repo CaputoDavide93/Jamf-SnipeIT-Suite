@@ -85,8 +85,8 @@ def build_table() -> str:
         lines.append(f"| `{name}` | Reachable via `run-group` only | {cron_cell} |")
 
     count = len(commands) + len(group_only)
-    header = (f"_{count} CLI commands, generated from `src/main.py` by "
-              f"`tools/gen_modules_doc.py` — do not edit by hand._\n")
+    header = (f"*{count} CLI commands, generated from `src/main.py` by "
+              f"`tools/gen_modules_doc.py` — do not edit by hand.*\n")
     return header + "\n" + "\n".join(lines)
 
 

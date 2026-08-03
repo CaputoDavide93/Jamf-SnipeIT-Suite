@@ -292,7 +292,7 @@ class UserMatchModule:
         smart_group: Optional[str] = None,
         limit: Optional[int] = None,
         dry_run: bool = False,
-        allow_reassignment: bool = False,
+        allow_reassignment: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Run the user match provisioning.
@@ -311,9 +311,7 @@ class UserMatchModule:
         if not group_name:
             raise ValueError("Smart group name required. Set --smart-group or in config.")
         
-        # Use config setting if not overridden
-        if not allow_reassignment:
-            allow_reassignment = self.config.matching.allow_reassignment
+        allow_reassignment = self._effective_allow_reassignment(allow_reassignment)
         
         logger.info(f"Starting User Match: group={group_name}, dry_run={dry_run}")
         self._dry_run = dry_run
@@ -415,6 +413,12 @@ class UserMatchModule:
         self._print_summary(results, dry_run)
 
         return results
+
+    def _effective_allow_reassignment(self, requested: Optional[bool]) -> bool:
+        """Resolve the reassignment policy without discarding explicit False."""
+        if requested is None:
+            return self.config.matching.allow_reassignment
+        return requested
     
     def _process_device(
         self,
@@ -951,7 +955,7 @@ def run_user_match(
     smart_group: Optional[str] = None,
     limit: Optional[int] = None,
     dry_run: bool = False,
-    allow_reassignment: bool = False,
+    allow_reassignment: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to run the user match module.

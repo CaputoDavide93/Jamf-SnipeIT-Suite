@@ -3,7 +3,7 @@ Mutex lock via AWS SSM Parameter Store.
 
 Prevents concurrent module runs from colliding (e.g. two Fargate tasks
 triggered minutes apart both running User Match → one reverts the other's
-work). Silent no-op if AWS/boto3 not available (local dev).
+work). Set MUTEX_DISABLED=true explicitly for local development without AWS.
 """
 import logging
 import os
@@ -20,24 +20,33 @@ _LOCK_REFRESH_SEC = int(os.environ.get("MUTEX_LOCK_REFRESH_SEC", "300"))
 
 
 class RunMutex:
-    """SSM-backed mutex. Best-effort; silent no-op if SSM unavailable."""
+    """SSM-backed mutex that fails closed unless explicitly disabled."""
 
     def __init__(self, param_name: str = _LOCK_PARAM):
         self.param_name = param_name
         self._ssm = None
+        self._disabled = os.environ.get("MUTEX_DISABLED", "false").strip().lower() in (
+            "1", "true", "yes",
+        )
         self._owner = f"{socket.gethostname()}-{os.getpid()}"
         self._acquired = False
         self._refresh_thread = None
+        if self._disabled:
+            logger.warning("Mutex explicitly disabled by MUTEX_DISABLED")
+            return
         try:
             import boto3
             self._ssm = boto3.client("ssm")
-        except Exception:
-            logger.debug("Mutex: boto3 unavailable, locking disabled")
+        except Exception as exc:
+            logger.error("Mutex backend unavailable: %s", exc)
 
     def acquire(self) -> bool:
         """Try to acquire. Returns True if acquired, False if already held."""
+        if self._disabled:
+            return True
         if not self._ssm:
-            return True  # no-op when SSM unavailable
+            logger.error("Mutex acquisition refused: SSM backend unavailable")
+            return False
 
         now = datetime.now(timezone.utc)
         try:
@@ -74,8 +83,8 @@ class RunMutex:
             logger.info(f"Mutex acquired by {self._owner} (TTL {_LOCK_TTL_MIN} min)")
             return True
         except Exception as e:
-            logger.warning(f"Mutex acquire error (continuing without lock): {e}")
-            return True
+            logger.error(f"Mutex acquire error: {e}")
+            return False
 
     def _claim(self, value: str) -> None:
         """Create the lock parameter, failing if it already exists."""
@@ -97,23 +106,24 @@ class RunMutex:
         )
 
     def _holder_expired(self, now: datetime) -> bool:
-        """Whether the existing lock is past its TTL (unreadable == expired)."""
+        """Whether a readable, well-formed existing lock is past its TTL."""
         try:
             resp = self._ssm.get_parameter(Name=self.param_name)
             val = resp["Parameter"]["Value"]
-        except Exception:
-            return True  # vanished between calls — treat as free
+        except Exception as exc:
+            logger.error("Mutex holder could not be inspected: %s", exc)
+            return False
 
         parts = val.split("|", 1)
         if len(parts) != 2:
-            logger.warning("Mutex value malformed — treating as expired")
-            return True
+            logger.error("Mutex value malformed — refusing to reclaim")
+            return False
         owner, expiry = parts
         try:
             expiry_dt = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
         except ValueError:
-            logger.warning(f"Mutex expiry unparseable ('{expiry}') — treating as expired")
-            return True
+            logger.error(f"Mutex expiry unparseable ('{expiry}') — refusing to reclaim")
+            return False
         if expiry_dt > now:
             logger.warning(f"Mutex held by '{owner}' until {expiry_dt.isoformat()}")
             return False
@@ -141,27 +151,44 @@ class RunMutex:
         try:
             resp = self._ssm.get_parameter(Name=self.param_name)
             return resp["Parameter"]["Value"].split("|", 1)[0] == self._owner
-        except Exception:
-            # Cannot read it (gone, or a fake client in tests) — the previous
-            # behaviour was to delete, so keep that rather than leak the lock.
-            return True
+        except Exception as exc:
+            logger.warning("Mutex ownership could not be verified: %s", exc)
+            return False
 
     def _refresh_lock(self):
         """Background thread to extend TTL while the lock is held."""
         while self._acquired and self._ssm:
-            try:
-                now = datetime.now(timezone.utc)
-                expiry = (now + timedelta(minutes=_LOCK_TTL_MIN)).isoformat()
-                self._ssm.put_parameter(
-                    Name=self.param_name,
-                    Value=f"{self._owner}|{expiry}",
-                    Type="String",
-                    Overwrite=True,
-                )
-                logger.debug("Mutex TTL refreshed")
-            except Exception as e:
-                logger.warning(f"Mutex refresh error: {e}")
+            refresh_result = self._refresh_once()
+            if refresh_result is False:
+                return
             time.sleep(max(60, _LOCK_REFRESH_SEC))
+
+    def _refresh_once(self) -> Optional[bool]:
+        """Refresh one TTL: True=done, False=owner lost, None=retry later."""
+        try:
+            response = self._ssm.get_parameter(Name=self.param_name)
+            stored_owner = response["Parameter"]["Value"].split("|", 1)[0]
+        except Exception as exc:
+            logger.warning("Mutex ownership check failed during refresh: %s", exc)
+            return None
+
+        if stored_owner != self._owner:
+            logger.error("Mutex ownership lost or unverifiable — stopping refresh")
+            return False
+        try:
+            now = datetime.now(timezone.utc)
+            expiry = (now + timedelta(minutes=_LOCK_TTL_MIN)).isoformat()
+            self._ssm.put_parameter(
+                Name=self.param_name,
+                Value=f"{self._owner}|{expiry}",
+                Type="String",
+                Overwrite=True,
+            )
+            logger.debug("Mutex TTL refreshed")
+            return True
+        except Exception as e:
+            logger.warning(f"Mutex refresh error: {e}")
+            return None
 
     def _start_refresh_thread(self):
         if not self._ssm or self._refresh_thread:

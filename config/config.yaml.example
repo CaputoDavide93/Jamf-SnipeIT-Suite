@@ -55,7 +55,7 @@ azure:
 # -----------------------------------------------------------------------------
 hibob:
   enabled: false
-  api_url: "https://api.hibob.com/v1"
+  base_url: "https://api.hibob.com/v1"
   service_user_id: ""
   service_user_token: ""
   equipment_field: ""  # auto-discovered if blank
@@ -109,6 +109,15 @@ modules:
     dry_run: false
     batch_size: 100
     batch_delay_seconds: 30
+
+  ai_audit:
+    enabled: true
+    allow_external_pii: false  # tokenise names, emails, serials, and IDs sent to the LLM
+
+  health_check:
+    enabled: true
+    max_workers: 8
+    scan_error_ratio_threshold: 0.1
 
   # Model Sync module settings
   model_sync:

@@ -78,9 +78,16 @@ module "jamf_snipeit_suite" {
   matching_email_domain   = var.matching_email_domain
   matching_skip_usernames = var.matching_skip_usernames
 
-  # -- Feature flags (rehire detection live, contractor marking on) --
-  rehire_detection_dry_run = "false"
-  mark_contractors         = "true"
+  # -- Feature flags --
+  rehire_detection_dry_run = var.rehire_detection_dry_run
+  mark_contractors         = var.mark_contractors
+
+  # Optional production safety overrides, keyed by canonical module name.
+  module_enabled_overrides                = var.module_enabled_overrides
+  module_dry_run_overrides                = var.module_dry_run_overrides
+  ai_audit_allow_external_pii             = var.ai_audit_allow_external_pii
+  health_check_max_workers                = var.health_check_max_workers
+  health_check_scan_error_ratio_threshold = var.health_check_scan_error_ratio_threshold
 
   # -- Slack --
   slack_bot_token  = var.slack_bot_token
@@ -180,6 +187,44 @@ variable "matching_email_domain" {
 variable "matching_skip_usernames" {
   type    = string
   default = "admin,administrator,shared,guest,dan,createfuture,xdesign,payables,iossandboxaccount,iossandbox,sandbox,testuser,test"
+}
+
+variable "module_enabled_overrides" {
+  type    = map(bool)
+  default = {}
+}
+
+variable "rehire_detection_dry_run" {
+  # Prod has run rehire detection live since task-def rev 6. The shared module
+  # defaults this to true (safe for new environments); prod must keep its
+  # codified live state or the next apply would silently revert to dry-run.
+  type    = bool
+  default = false
+}
+
+variable "mark_contractors" {
+  type    = bool
+  default = true
+}
+
+variable "module_dry_run_overrides" {
+  type    = map(bool)
+  default = {}
+}
+
+variable "ai_audit_allow_external_pii" {
+  type    = bool
+  default = false
+}
+
+variable "health_check_max_workers" {
+  type    = number
+  default = 8
+}
+
+variable "health_check_scan_error_ratio_threshold" {
+  type    = number
+  default = 0.1
 }
 
 variable "slack_bot_token" {

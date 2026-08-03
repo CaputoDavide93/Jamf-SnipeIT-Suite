@@ -3,13 +3,12 @@
 Jamf-SnipeIT Suite - Docker Scheduler
 Main entry point for Docker container with:
 - Pre-flight API connectivity check
-- RunContext shared data bus across modules
+- Per-module execution metrics and Slack summaries
 - Module execution metrics & Slack notifications
 - Scheduler with on-demand "NOW" menu
 - Config hot-reload (watches file mtime)
 """
 import argparse
-import json
 import sys
 import os
 import logging
@@ -17,9 +16,9 @@ import signal
 import threading
 import time
 import select
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -35,9 +34,10 @@ except ImportError:
 
 from core.config import get_config, reload_config, Config
 from core.run_context import RunContext
-from core.state import SyncState, RetryQueue
+from core.state import SyncState
 from clients.slack import SlackClient
 from infra.health import start_health_server, get_health_server
+from infra.helpers import result_error_count
 from modules.sync import (
     UserMatchModule,
     SnipeToJamfModule,
@@ -61,11 +61,10 @@ from modules.maintenance.health_check import HealthCheckModule
 
 
 # Global state
-scheduler: Optional[BackgroundScheduler] = None
+scheduler: Optional[Any] = None
 config: Optional[Config] = None
 slack: Optional[SlackClient] = None
 sync_state: Optional[SyncState] = None
-retry_queue: Optional[RetryQueue] = None
 running = True
 _config_mtime: float = 0.0  # for hot-reload
 logger = logging.getLogger('jamf-snipeit-docker')
@@ -115,7 +114,10 @@ def pre_flight_check() -> bool:
             max_retries=2,
             retry_delay=2,
         )
-        return c.ping()
+        try:
+            return c.ping()
+        finally:
+            c.close()
 
     def _check_jamf():
         c = JamfClient(
@@ -128,7 +130,10 @@ def pre_flight_check() -> bool:
             max_retries=2,
             retry_delay=2,
         )
-        return c.ping()
+        try:
+            return c.ping()
+        finally:
+            c.close()
 
     def _check_azure():
         c = AzureClient(
@@ -139,7 +144,10 @@ def pre_flight_check() -> bool:
             max_retries=2,
             retry_delay=2,
         )
-        return c.ping()
+        try:
+            return c.ping()
+        finally:
+            c.close()
 
     checks = [
         ("Snipe-IT", _check_snipe),
@@ -164,7 +172,7 @@ def pre_flight_check() -> bool:
     if all_ok:
         logger.info("All APIs reachable")
     else:
-        logger.warning("Some APIs unreachable — modules may fail")
+        logger.error("Pre-flight failed — module execution blocked")
 
     return all_ok
 
@@ -190,7 +198,8 @@ def check_config_reload():
 
 
 def run_module_safe(name: str, runner_fn, dry_run: bool = False,
-                    ctx: Optional[RunContext] = None) -> Dict:
+                    ctx: Optional[RunContext] = None,
+                    module_key: Optional[str] = None) -> Dict:
     """
     Run a module safely, catching exceptions.
     Optionally tracks metrics via RunContext.
@@ -198,6 +207,33 @@ def run_module_safe(name: str, runner_fn, dry_run: bool = False,
     Returns:
         Dict with 'success', 'error', and 'results' keys
     """
+    module_key = module_key or {
+        "Azure Starters": "azure_starters",
+        "User Enrichment": "user_enrichment",
+        "Rehire Detection": "rehire_detection",
+        "Model Sync": "model_sync",
+        "Correction": "correction",
+        "User Match": "user_match",
+        "Snipe-to-Jamf": "snipe_to_jamf",
+        "Leavers": "leavers",
+        "Peripherals Sync": "peripherals_sync",
+        "Cleanup": "cleanup",
+        "Username Standardize": "username_standardize",
+        "AI Audit": "ai_audit",
+        "Health Check": "health_check",
+        "Reconciliation": "reconciliation",
+    }.get(name)
+    if module_key:
+        settings = config.get_module_settings(module_key)
+        if not settings.enabled:
+            logger.info("--- %s skipped: disabled in config ---", name)
+            return {
+                'success': True,
+                'error': None,
+                'results': {'skipped': True, 'reason': 'disabled'},
+            }
+        dry_run = dry_run or settings.dry_run
+
     logger.info(f"--- {name} started ---")
 
     if ctx:
@@ -207,14 +243,27 @@ def run_module_safe(name: str, runner_fn, dry_run: bool = False,
 
     try:
         results = runner_fn(dry_run=dry_run)
-        logger.info(f"--- {name} completed ---")
+        error_count = result_error_count(results)
+        succeeded = error_count == 0
+        logger.info(
+            "--- %s %s%s ---",
+            name,
+            "completed" if succeeded else "completed with errors",
+            f" ({error_count})" if error_count else "",
+        )
         if ctx:
             ctx.stop_module(name, results=results if isinstance(results, dict) else None)
-        if sync_state:
+        if sync_state and succeeded:
             sync_state.set_last_run(name)
         if health:
-            health.record_run(success=True, module_name=name)
-        return {'success': True, 'error': None, 'results': results}
+            health.record_run(success=succeeded, module_name=name)
+        if not succeeded and slack:
+            slack.notify_error(name, f"Module returned {error_count} error(s)")
+        return {
+            'success': succeeded,
+            'error': None if succeeded else f"module_errors:{error_count}",
+            'results': results,
+        }
     except Exception as e:
         logger.error(f"--- {name} FAILED: {e} ---")
         logger.exception("Traceback:")
@@ -240,9 +289,15 @@ def run_scheduled(name: str, runner_fn, dry_run: bool = False) -> Dict:
     mutex = RunMutex()
     if not mutex.acquire():
         logger.warning(f"--- {name} SKIPPED: another run holds the mutex ---")
-        return {'success': False, 'error': 'mutex_held', 'results': None}
+        health = get_health_server()
+        if health:
+            health.record_run(success=False, module_name=name)
+        raise RuntimeError(f"{name} skipped: mutex unavailable or already held")
     try:
-        return run_module_safe(name, runner_fn, dry_run=dry_run)
+        outcome = run_module_safe(name, runner_fn, dry_run=dry_run)
+        if not outcome.get("success", False):
+            raise RuntimeError(f"{name} failed: {outcome.get('error') or 'unknown error'}")
+        return outcome
     finally:
         mutex.release()
 
@@ -377,7 +432,7 @@ def run_health_check(dry_run: bool = False) -> Dict:
 
 def run_all_modules_startup(dry_run: bool = False):
     """
-    Run all modules on startup with RunContext for shared data and metrics.
+    Run all modules on startup with shared execution metrics.
     Continue even if one fails, report results at end.
     """
     mode = "DRY RUN" if dry_run else "LIVE"
@@ -391,8 +446,8 @@ def run_all_modules_startup(dry_run: bool = False):
         return {"aborted": True, "reason": "mutex_held"}
 
     try:
-        # Pre-flight connectivity check
-        pre_flight_check()
+        if not pre_flight_check():
+            return {"aborted": True, "reason": "preflight_failed"}
 
         ctx = RunContext()
 
@@ -541,38 +596,38 @@ def on_demand_menu():
     elif choice == '4':
         run_module_safe("Model Sync", run_model_sync, dry_run)
     elif choice == '5':
-        run_module_safe("Reconciliation", run_reconciliation, dry_run)
+        run_module_safe("Reconciliation", run_reconciliation, dry_run, module_key="reconciliation")
     elif choice == '6':
         run_all_modules_startup()
     elif choice == '7':
         print("\n  🧪 DRY RUN MODE - No changes will be made\n")
         run_all_modules_startup(dry_run=True)
     elif choice == '8':
-        run_module_safe("Self-Healing Correction", run_correction, dry_run)
+        run_module_safe("Self-Healing Correction", run_correction, dry_run, module_key="correction")
     elif choice == '9':
         run_module_safe("Azure Starters", run_azure_starters, dry_run)
     elif choice == '10':
         run_module_safe("Cleanup", run_cleanup, dry_run)
     elif choice == '11':
-        run_module_safe("Cleanup (DRY RUN)", run_cleanup, dry_run=True)
+        run_module_safe("Cleanup (DRY RUN)", run_cleanup, dry_run=True, module_key="cleanup")
     elif choice == '12':
         run_module_safe("Peripherals Sync", run_peripherals_sync, dry_run)
     elif choice == '13':
         run_module_safe("Username Standardize", run_username_standardize, dry_run)
     elif choice == '14':
-        run_module_safe("Username Standardize (DRY)", run_username_standardize, dry_run=True)
+        run_module_safe("Username Standardize (DRY)", run_username_standardize, dry_run=True, module_key="username_standardize")
     elif choice == '15':
         run_module_safe("User Enrichment", run_user_enrichment, dry_run)
     elif choice == '16':
-        run_module_safe("User Enrichment (DRY)", run_user_enrichment, dry_run=True)
+        run_module_safe("User Enrichment (DRY)", run_user_enrichment, dry_run=True, module_key="user_enrichment")
     elif choice == '17':
         run_module_safe("AI Audit", run_ai_audit, dry_run)
     elif choice == '18':
-        run_module_safe("AI Audit (DRY)", run_ai_audit, dry_run=True)
+        run_module_safe("AI Audit (DRY)", run_ai_audit, dry_run=True, module_key="ai_audit")
     elif choice == '19':
         run_module_safe("Rehire Detection", run_rehire_detection, dry_run)
     elif choice == '20':
-        run_module_safe("Rehire Detection (DRY)", run_rehire_detection, dry_run=True)
+        run_module_safe("Rehire Detection (DRY)", run_rehire_detection, dry_run=True, module_key="rehire_detection")
     else:
         print("  Invalid choice.")
     
@@ -610,7 +665,7 @@ def input_listener():
 def job_listener(event):
     """APScheduler event listener for job completion."""
     if event.exception:
-        logger.error(f"Job {event.job_id} failed")
+        logger.error(f"Job {event.job_id} failed: {event.exception}")
     else:
         logger.info(f"Job {event.job_id} completed successfully")
     
@@ -618,7 +673,7 @@ def job_listener(event):
     print_next_run_times()
 
 
-def create_scheduler(cfg: Config) -> BackgroundScheduler:
+def create_scheduler(cfg: Config, dry_run: bool = False) -> Any:
     """Create and configure the APScheduler."""
     global scheduler
     
@@ -637,7 +692,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('rehire_detection', {}).get('enabled', False):
         cron = jobs_config['rehire_detection'].get('cron', '35 18 * * 2')
         scheduler.add_job(
-            lambda: run_scheduled("Rehire Detection", run_rehire_detection),
+            lambda: run_scheduled("Rehire Detection", run_rehire_detection, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='rehire_detection',
             name='Rehire Detection',
@@ -648,7 +703,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('leavers', {}).get('enabled', False):
         cron = jobs_config['leavers'].get('cron', '0 9 * * 1')
         scheduler.add_job(
-            lambda: run_scheduled("Leavers", run_leavers),
+            lambda: run_scheduled("Leavers", run_leavers, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='leavers',
             name='Leavers Module',
@@ -660,7 +715,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('snipe_to_jamf', {}).get('enabled', False):
         cron = jobs_config['snipe_to_jamf'].get('cron', '0 6 * * *')
         scheduler.add_job(
-            lambda: run_scheduled("Snipe-to-Jamf", run_snipe_to_jamf),
+            lambda: run_scheduled("Snipe-to-Jamf", run_snipe_to_jamf, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='snipe_to_jamf',
             name='Snipe-to-Jamf Sync',
@@ -672,7 +727,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('user_match', {}).get('enabled', False):
         cron = jobs_config['user_match'].get('cron', '0 9 * * 2')
         scheduler.add_job(
-            lambda: run_scheduled("User Match", run_user_match),
+            lambda: run_scheduled("User Match", run_user_match, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='user_match',
             name='User Match Module',
@@ -684,7 +739,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('model_sync', {}).get('enabled', False):
         cron = jobs_config['model_sync'].get('cron', '0 2 * * 0')
         scheduler.add_job(
-            lambda: run_scheduled("Model Sync", run_model_sync),
+            lambda: run_scheduled("Model Sync", run_model_sync, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='model_sync',
             name='Model Sync Module',
@@ -696,7 +751,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('azure_starters', {}).get('enabled', False):
         cron = jobs_config['azure_starters'].get('cron', '0 6 * * 1')
         scheduler.add_job(
-            lambda: run_scheduled("Azure Starters", run_azure_starters),
+            lambda: run_scheduled("Azure Starters", run_azure_starters, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='azure_starters',
             name='Azure Starters Module',
@@ -708,7 +763,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('correction', {}).get('enabled', False):
         cron = jobs_config['correction'].get('cron', '0 8 * * *')
         scheduler.add_job(
-            lambda: run_scheduled("Correction", run_correction),
+            lambda: run_scheduled("Correction", run_correction, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='correction',
             name='Self-Healing Correction',
@@ -720,7 +775,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('cleanup', {}).get('enabled', False):
         cron = jobs_config['cleanup'].get('cron', '0 3 * * 0')
         scheduler.add_job(
-            lambda: run_scheduled("Cleanup", run_cleanup),
+            lambda: run_scheduled("Cleanup", run_cleanup, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='cleanup',
             name='Cleanup & Duplicate Detection',
@@ -732,7 +787,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('user_enrichment', {}).get('enabled', False):
         cron = jobs_config['user_enrichment'].get('cron', '30 6 * * 1')
         scheduler.add_job(
-            lambda: run_scheduled("User Enrichment", run_user_enrichment),
+            lambda: run_scheduled("User Enrichment", run_user_enrichment, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='user_enrichment',
             name='User Enrichment Module',
@@ -744,7 +799,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('peripherals_sync', {}).get('enabled', False):
         cron = jobs_config['peripherals_sync'].get('cron', '0 8 * * 1')
         scheduler.add_job(
-            lambda: run_scheduled("Peripherals Sync", run_peripherals_sync),
+            lambda: run_scheduled("Peripherals Sync", run_peripherals_sync, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='peripherals_sync',
             name='Peripherals Sync (HiBob)',
@@ -756,7 +811,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('ai_audit', {}).get('enabled', False):
         cron = jobs_config['ai_audit'].get('cron', '0 4 * * 0')
         scheduler.add_job(
-            lambda: run_scheduled("AI Audit", run_ai_audit),
+            lambda: run_scheduled("AI Audit", run_ai_audit, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='ai_audit',
             name='AI Cross-Platform Audit',
@@ -768,7 +823,7 @@ def create_scheduler(cfg: Config) -> BackgroundScheduler:
     if jobs_config.get('health_check', {}).get('enabled', False):
         cron = jobs_config['health_check'].get('cron', '0 9 * * *')
         scheduler.add_job(
-            lambda: run_scheduled("Health Check", run_health_check),
+            lambda: run_scheduled("Health Check", run_health_check, dry_run=dry_run),
             CronTrigger.from_crontab(cron),
             id='health_check',
             name='Health Check',
@@ -790,7 +845,7 @@ def signal_handler(signum, frame):
 
 
 def main():
-    global config, running, slack, sync_state, retry_queue, _config_mtime
+    global config, running, slack, sync_state, _config_mtime
     
     parser = argparse.ArgumentParser(description='Jamf-SnipeIT Suite - Docker Scheduler')
     parser.add_argument('--config', '-c', default='/app/config/config.yaml',
@@ -844,7 +899,6 @@ def main():
 
     # Initialise persistent state helpers
     sync_state = SyncState()
-    retry_queue = RetryQueue()
 
     # Start health server
     try:
@@ -866,19 +920,28 @@ def main():
     
     # Run all modules on startup if configured
     run_on_startup = scheduler_cfg.get('run_on_startup', True) if isinstance(scheduler_cfg, dict) else getattr(scheduler_cfg, 'run_on_startup', True)
+    startup_results = None
     if run_on_startup and not args.no_startup_run:
-        run_all_modules_startup(dry_run=dry_run)
+        startup_results = run_all_modules_startup(dry_run=dry_run)
     
     # If scheduler disabled, exit after startup run
     if not scheduler_enabled:
         logger.info("Scheduler disabled — exiting")
+        if isinstance(startup_results, dict):
+            if startup_results.get("aborted"):
+                return 1
+            if any(
+                isinstance(result, dict) and not result.get("success", False)
+                for result in startup_results.values()
+            ):
+                return 1
         return 0
 
     # Create and start scheduler
     logger.info("Configuring scheduled jobs...")
     
     try:
-        sched = create_scheduler(config)
+        sched = create_scheduler(config, dry_run=dry_run)
         
         jobs = sched.get_jobs()
         if not jobs:

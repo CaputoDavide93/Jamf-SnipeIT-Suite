@@ -4,6 +4,7 @@ Jamf-SnipeIT Suite - Main CLI Entry Point
 Unified tool for asset management between Jamf Pro, Snipe-IT, and Azure AD.
 """
 import argparse
+import copy
 import sys
 import logging
 import os
@@ -13,6 +14,7 @@ from typing import Optional
 # Module imports
 from core.config import get_config, Config
 from infra.health import start_health_server, get_health_server
+from infra.helpers import result_error_count
 from modules import (
     LeaversModule,
     RehireDetectionModule, 
@@ -24,6 +26,24 @@ from modules import (
     AzureStartersModule,
     CorrectionModule,
 )
+
+
+def _invoke_module(module_name: str, handler, args, config: Config):
+    """Invoke a CLI module with its enabled and dry-run controls applied."""
+    settings = config.get_module_settings(module_name)
+    if not settings.enabled:
+        print(f"⏭️  {module_name} disabled in configuration — skipping")
+        return (0, {"skipped": True, "reason": "disabled"})
+
+    controlled_args = copy.copy(args)
+    if hasattr(controlled_args, "dry_run"):
+        controlled_args.dry_run = bool(controlled_args.dry_run or settings.dry_run)
+    return handler(controlled_args, config)
+
+
+def _module_outcome(results):
+    """Return the standard CLI `(exit_code, results)` tuple."""
+    return (0 if result_error_count(results) == 0 else 1, results)
 
 
 def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> logging.Logger:
@@ -270,7 +290,7 @@ def cmd_health_check(args, config: Config):
         results = module.run(dry_run=args.dry_run)
     finally:
         module.close()
-    return (0, results)
+    return _module_outcome(results)
 
 
 def cmd_pending_reconciliation(args, config: Config):
@@ -281,7 +301,7 @@ def cmd_pending_reconciliation(args, config: Config):
         results = module.run(dry_run=args.dry_run)
     finally:
         module.close()
-    return (0, results)
+    return _module_outcome(results)
 
 
 def cmd_jamf_location_cleanup(args, config: Config):
@@ -292,7 +312,7 @@ def cmd_jamf_location_cleanup(args, config: Config):
         results = module.run(dry_run=args.dry_run)
     finally:
         module.close()
-    return (0, results)
+    return _module_outcome(results)
 
 
 def cmd_ai_audit(args, config: Config):
@@ -303,7 +323,7 @@ def cmd_ai_audit(args, config: Config):
         results = module.run(dry_run=args.dry_run)
     finally:
         module.close()
-    return (0, results)
+    return _module_outcome(results)
 
 
 def cmd_monthly_digest(args, config: Config):
@@ -326,7 +346,7 @@ def cmd_cleanup(args, config: Config):
         results = module.run(dry_run=args.dry_run)
     finally:
         module.close()
-    return (0, results)
+    return _module_outcome(results)
 
 
 def cmd_user_enrichment(args, config: Config):
@@ -337,7 +357,7 @@ def cmd_user_enrichment(args, config: Config):
         results = module.run(dry_run=args.dry_run)
     finally:
         module.close()
-    return (0, results)
+    return _module_outcome(results)
 
 
 def cmd_peripherals_sync(args, config: Config):
@@ -348,7 +368,7 @@ def cmd_peripherals_sync(args, config: Config):
         results = module.run(dry_run=args.dry_run)
     finally:
         module.close()
-    return (0, results)
+    return _module_outcome(results)
 
 
 def cmd_username_standardize(args, config: Config):
@@ -359,7 +379,7 @@ def cmd_username_standardize(args, config: Config):
         results = module.run(dry_run=args.dry_run)
     finally:
         module.close()
-    return (0, results)
+    return _module_outcome(results)
 
 
 def cmd_run_group(args, config: Config):
@@ -402,7 +422,7 @@ def cmd_run_group(args, config: Config):
         for name in requested:
             print(f"\n{'='*60}\n  Group run: {name}\n{'='*60}")
             try:
-                rc = name_to_handler[name](args, config)
+                rc = _invoke_module(name.replace("-", "_"), name_to_handler[name], args, config)
                 if isinstance(rc, tuple):
                     rc = rc[0]
                 if rc not in (None, 0):
@@ -427,23 +447,23 @@ def cmd_run_all(args, config: Config):
     modules = [
         # Rehire Detection first: un-ghost returning employees before the
         # sync chain (Correction/User Match) and Leavers evaluate them.
-        ("Rehire Detection", lambda: cmd_rehire_detection(args, config)),
-        ("Model Sync", lambda: cmd_model_sync(args, config)),
-        ("Correction", lambda: cmd_correction(args, config)),
-        ("User Match", lambda: cmd_user_match(args, config)),
-        ("Snipe-to-Jamf", lambda: cmd_snipe_to_jamf(args, config)),
-        ("Leavers", lambda: cmd_leavers(args, config)),
+        ("rehire_detection", "Rehire Detection", cmd_rehire_detection),
+        ("model_sync", "Model Sync", cmd_model_sync),
+        ("correction", "Correction", cmd_correction),
+        ("user_match", "User Match", cmd_user_match),
+        ("snipe_to_jamf", "Snipe-to-Jamf", cmd_snipe_to_jamf),
+        ("leavers", "Leavers", cmd_leavers),
     ]
     
     run_results = {}
     module_data = {}
     
-    for name, runner in modules:
+    for module_name, name, handler in modules:
         print(f"\n{'='*60}")
         print(f"  Starting: {name}")
         print(f"{'='*60}")
         try:
-            result = runner()
+            result = _invoke_module(module_name, handler, args, config)
             # Handle both tuple (code, data) and plain code returns
             if isinstance(result, tuple):
                 code, data = result
@@ -638,15 +658,15 @@ def interactive_menu(config: Config):
         args = Args()
         
         if choice == '1':
-            cmd_leavers(args, config)
+            _invoke_module("leavers", cmd_leavers, args, config)
         elif choice == '2':
-            cmd_snipe_to_jamf(args, config)
+            _invoke_module("snipe_to_jamf", cmd_snipe_to_jamf, args, config)
         elif choice == '3':
-            cmd_user_match(args, config)
+            _invoke_module("user_match", cmd_user_match, args, config)
         elif choice == '4':
             check_only = input("  Check only? (y/n): ").strip().lower() == 'y'
             args.check_only = check_only
-            cmd_model_sync(args, config)
+            _invoke_module("model_sync", cmd_model_sync, args, config)
         elif choice == '5':
             print("\n  WakeUp Options:")
             print("  1. Wake by Smart Group ID")
@@ -662,18 +682,18 @@ def interactive_menu(config: Config):
             else:
                 print("  Invalid choice")
                 continue
-            cmd_wakeup(args, config)
+            _invoke_module("wakeup", cmd_wakeup, args, config)
         elif choice == '6':
             export = input("  Export to CSV? (y/n): ").strip().lower() == 'y'
             args.export_csv = export
-            cmd_reconcile(args, config)
+            _invoke_module("reconciliation", cmd_reconcile, args, config)
         elif choice == '7':
             cmd_run_all(args, config)
         elif choice == '8':
             args.dry_run = True
             cmd_run_all(args, config)
         elif choice == '9':
-            cmd_correction(args, config)
+            _invoke_module("correction", cmd_correction, args, config)
         elif choice == '0':
             print("\n  Goodbye! 👋\n")
             break
@@ -930,7 +950,30 @@ Examples:
             # int. sys.exit() only understands int/None — handing it a tuple
             # dumps the whole results dict to stderr and exits 1, so every
             # single-module invocation looked like a failure to ECS.
-            outcome = handler(args, config)
+            module_name = {
+                'leavers': 'leavers',
+                'rehire-detection': 'rehire_detection',
+                'snipe-to-jamf': 'snipe_to_jamf',
+                'user-match': 'user_match',
+                'model-sync': 'model_sync',
+                'wakeup': 'wakeup',
+                'reconcile': 'reconciliation',
+                'azure-starters': 'azure_starters',
+                'correction': 'correction',
+                'health-check': 'health_check',
+                'pending-reconciliation': 'pending_reconciliation',
+                'jamf-location-cleanup': 'jamf_location_cleanup',
+                'ai-audit': 'ai_audit',
+                'cleanup': 'cleanup',
+                'user-enrichment': 'user_enrichment',
+                'peripherals-sync': 'peripherals_sync',
+                'username-standardize': 'username_standardize',
+            }.get(args.command)
+            outcome = (
+                _invoke_module(module_name, handler, args, config)
+                if module_name
+                else handler(args, config)
+            )
             if isinstance(outcome, tuple):
                 outcome = outcome[0]
             return 0 if outcome is None else int(outcome)

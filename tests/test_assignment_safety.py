@@ -6,6 +6,9 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from matching.user_matcher import can_auto_reassign
+from clients.snipeit import SnipeITClient
+from main import _invoke_module
+from infra.helpers import status_id
 from modules.lifecycle.leavers import LeaversModule
 from modules.lifecycle.rehire_detection import RehireDetectionModule
 from modules.maintenance.cleanup import CleanupModule
@@ -20,6 +23,110 @@ class FakeAudit:
 
     def write(self, **kwargs):
         self.rows.append(kwargs)
+
+
+class FakePageResponse:
+    def __init__(self, rows, total):
+        self._rows = rows
+        self._total = total
+
+    def json(self):
+        return {"rows": self._rows, "total": self._total}
+
+
+def test_snipe_user_assets_and_accessory_checkouts_are_paginated():
+    client = SnipeITClient.__new__(SnipeITClient)
+    calls = []
+
+    def request(method, path, params=None):
+        calls.append((method, path, params))
+        offset = params["offset"]
+        if path == "/users/42/assets":
+            rows = (
+                [{"id": asset_id} for asset_id in range(1, 501)]
+                if offset == 0
+                else [{"id": 501}]
+            )
+            return FakePageResponse(rows, total=501)
+        return FakePageResponse(
+            [{"id": offset + 1}, {"id": offset + 2}] if offset == 0 else [{"id": 3}],
+            total=3,
+        )
+
+    client._request = request
+
+    assert [row["id"] for row in client._paginated_rows("/probe", limit=2)] == [1, 2, 3]
+    calls.clear()
+    assert len(client.get_user_assets(42)) == 501
+    assert calls[0][1] == "/users/42/assets"
+    assert calls[-1][2]["offset"] == 500
+    calls.clear()
+    assert len(client.get_accessory_checkouts(7, limit=2)) == 3
+    assert calls[-1][2]["offset"] == 2
+
+
+def test_snipe_pagination_continues_when_total_is_omitted():
+    client = SnipeITClient.__new__(SnipeITClient)
+    offsets = []
+
+    class ResponseWithoutTotal:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def json(self):
+            return {"rows": self.rows}
+
+    def request(method, path, params=None):
+        offset = params["offset"]
+        offsets.append(offset)
+        rows = [{"id": offset + 1}, {"id": offset + 2}] if offset == 0 else []
+        return ResponseWithoutTotal(rows)
+
+    client._request = request
+
+    assert [row["id"] for row in client._paginated_rows("/probe", limit=2)] == [1, 2]
+    assert offsets == [0, 2]
+
+
+def test_explicit_false_disables_reassignment_even_when_config_enables_it():
+    module = UserMatchModule.__new__(UserMatchModule)
+    module.config = SimpleNamespace(
+        matching=SimpleNamespace(allow_reassignment=True),
+    )
+
+    assert module._effective_allow_reassignment(False) is False
+    assert module._effective_allow_reassignment(None) is True
+
+
+def test_snipe_status_id_accepts_common_response_shapes():
+    assert status_id({"id": 8, "name": "Pending"}) == 8
+    assert status_id(8) == 8
+    assert status_id("8") == 8
+    assert status_id("Pending") is None
+
+
+def test_cli_module_controls_skip_disabled_and_force_dry_run():
+    calls = []
+    args = SimpleNamespace(dry_run=False)
+
+    class Config:
+        def __init__(self, enabled, dry_run):
+            self.settings = SimpleNamespace(enabled=enabled, dry_run=dry_run)
+
+        def get_module_settings(self, module_name):
+            return self.settings
+
+    def handler(controlled_args, config):
+        calls.append(controlled_args.dry_run)
+        return (0, {})
+
+    skipped = _invoke_module("cleanup", handler, args, Config(False, False))
+    assert skipped[1]["skipped"] is True
+    assert calls == []
+
+    _invoke_module("cleanup", handler, args, Config(True, True))
+    assert calls == [True]
+    assert args.dry_run is False
 
 
 def test_shared_reassignment_policy():
@@ -256,6 +363,14 @@ def test_cleanup_only_groups_duplicate_emails():
     ]
     groups = module.find_duplicates(users)
     assert [[user["id"] for user in group] for group in groups] == [[1, 3]]
+
+
+def test_cleanup_accepts_no_content_delete_success():
+    module = CleanupModule.__new__(CleanupModule)
+    response = SimpleNamespace(status_code=204)
+    module.snipe = SimpleNamespace(_request=lambda *args, **kwargs: response)
+
+    assert module._delete_user(10) is True
 
 
 def test_cleanup_does_not_delete_user_after_failed_asset_transfer(tmp_path):

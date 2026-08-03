@@ -333,6 +333,8 @@ class CleanupModule:
     def _delete_user(self, user_id: int) -> bool:
         """Delete a Snipe-IT user by ID."""
         response = self.snipe._request("DELETE", f"/users/{user_id}")
+        if response and response.status_code == 204:
+            return True
         if response and response.status_code in (200, 201):
             result = response.json()
             if result.get("status") == "success":

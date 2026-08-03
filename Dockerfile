@@ -41,10 +41,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY src/ ./src/
 
-# Copy non-secret config files (mapping tables, model maps, user overrides)
-COPY config/equipment_mapping.json ./config/equipment_mapping.json
-COPY config/user_overrides.json ./config/user_overrides.json
-COPY config/model_map.json* ./config/
+# Copy available non-secret runtime mappings. The config directory always
+# exists; optional user overrides/model maps are included when supplied.
+COPY config/ ./config/
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/
@@ -69,4 +68,4 @@ ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Health check - hit the internal health server (started by docker_scheduler.py)
 HEALTHCHECK --interval=60s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=5)" || exit 1

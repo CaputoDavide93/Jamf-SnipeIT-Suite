@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.config import Config
 from core.client_factory import create_jamf_client, create_snipeit_client, create_slack_client, load_user_overrides
 from infra.audit_csv import AuditCSV
+from infra.helpers import status_id
 from infra.progress import ProgressTracker
 from infra.helpers import rate_limit_delay
 from matching.user_matcher import (
@@ -164,11 +165,8 @@ class CorrectionModule:
             # Pending assets: normally skip (set by Leavers, manual workflow).
             # EXCEPTION: if current assignee is [Disabled], the machine was probably
             # reassigned to someone else — let validation run so we can fix it.
-            status_label = asset.get("status_label")
-            status_id = None
-            if isinstance(status_label, dict):
-                status_id = status_label.get("id")
-            if status_id and status_id == pending_id:
+            current_status_id = status_id(asset.get("status_label"))
+            if current_status_id == pending_id:
                 assigned_to = asset.get("assigned_to") or {}
                 if not self._is_inactive_user(assigned_to):
                     # Pending + active assignee — genuine manual hold, skip

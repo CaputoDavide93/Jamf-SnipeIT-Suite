@@ -50,21 +50,38 @@ resource "aws_ecs_task_definition" "app" {
     essential = true
 
     # Non-sensitive configuration only
-    environment = [
-      { name = "RUN_MODE", value = "run-once" },
-      { name = "TZ", value = "Europe/London" },
-      { name = "SLACK_CHANNEL_ID", value = var.slack_channel_id },
-      { name = "AZURE_LEAVERS_GROUP_ID", value = var.azure_leavers_group_id },
-      { name = "AZURE_DISABLED_GROUP_ID", value = var.azure_disabled_group_id },
-      { name = "AZURE_STARTERS_GROUP_ID", value = var.azure_starters_group_id },
-      { name = "MATCHING_EMAIL_DOMAIN", value = var.matching_email_domain },
-      { name = "MATCHING_SKIP_USERNAMES", value = var.matching_skip_usernames },
-      { name = "AI_CACHE_S3_BUCKET", value = aws_s3_bucket.ai_cache.id },
-      { name = "AI_CACHE_S3_KEY", value = "ai-resolver-cache.json" },
-      { name = "MODEL_SYNC_CATEGORY_ID", value = "2" },
-      { name = "REHIRE_DETECTION_DRY_RUN", value = var.rehire_detection_dry_run },
-      { name = "MARK_CONTRACTORS", value = var.mark_contractors },
-    ]
+    environment = concat(
+      [
+        { name = "RUN_MODE", value = "run-once" },
+        { name = "TZ", value = "Europe/London" },
+        { name = "SLACK_CHANNEL_ID", value = var.slack_channel_id },
+        { name = "AZURE_LEAVERS_GROUP_ID", value = var.azure_leavers_group_id },
+        { name = "AZURE_DISABLED_GROUP_ID", value = var.azure_disabled_group_id },
+        { name = "AZURE_STARTERS_GROUP_ID", value = var.azure_starters_group_id },
+        { name = "MATCHING_EMAIL_DOMAIN", value = var.matching_email_domain },
+        { name = "MATCHING_SKIP_USERNAMES", value = var.matching_skip_usernames },
+        { name = "AI_CACHE_S3_BUCKET", value = aws_s3_bucket.ai_cache.id },
+        { name = "AI_CACHE_S3_KEY", value = "ai-resolver-cache.json" },
+        { name = "MODEL_SYNC_CATEGORY_ID", value = "2" },
+        { name = "REHIRE_DETECTION_DRY_RUN", value = tostring(var.rehire_detection_dry_run) },
+        { name = "MARK_CONTRACTORS", value = tostring(var.mark_contractors) },
+        { name = "AI_AUDIT_ALLOW_EXTERNAL_PII", value = tostring(var.ai_audit_allow_external_pii) },
+        { name = "HEALTH_CHECK_MAX_WORKERS", value = tostring(var.health_check_max_workers) },
+        { name = "HEALTH_CHECK_SCAN_ERROR_RATIO_THRESHOLD", value = tostring(var.health_check_scan_error_ratio_threshold) },
+      ],
+      [
+        for module_name, enabled in var.module_enabled_overrides : {
+          name  = "MODULE_${upper(module_name)}_ENABLED"
+          value = tostring(enabled)
+        }
+      ],
+      [
+        for module_name, dry_run in var.module_dry_run_overrides : {
+          name  = "MODULE_${upper(module_name)}_DRY_RUN"
+          value = tostring(dry_run)
+        }
+      ],
+    )
 
     # ALL credentials injected from SSM SecureString at runtime
     # These are NOT visible in the task definition, console, or CloudTrail
@@ -93,7 +110,7 @@ resource "aws_ecs_task_definition" "app" {
     }
 
     healthCheck = {
-      command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)\" || exit 1"]
+      command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=5)\" || exit 1"]
       interval    = 60
       timeout     = 10
       startPeriod = 120

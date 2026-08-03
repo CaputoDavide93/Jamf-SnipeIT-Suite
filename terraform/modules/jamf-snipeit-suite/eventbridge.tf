@@ -32,6 +32,8 @@ locals {
       command     = ["run-group", "--modules", "health-check"]
     }
     monthly-digest = {
+      # EventBridge day-of-week is 1=SUN..7=SAT, so the first Monday is 2#1.
+      # 1#1 would fire on the first Sunday, contradicting the description.
       cron        = "cron(0 9 ? * 2#1 *)"
       description = "First Mon of month 09:00 UTC — monthly digest Slack report"
       run_mode    = "cli"

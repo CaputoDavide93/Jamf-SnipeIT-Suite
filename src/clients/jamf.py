@@ -4,6 +4,7 @@ Consolidates all Jamf API functionality from multiple scripts.
 """
 import logging
 import re
+import threading
 import time
 import requests
 from typing import Any, Dict, List, Optional
@@ -88,22 +89,45 @@ class JamfClient:
         self.session.mount("http://", adapter)
         self._token: Optional[str] = None
         self._token_exp: float = 0
-    
+        # Health Check fans detail requests across a thread pool sharing one
+        # client, so token acquisition must be serialised or several threads
+        # race to refresh and can invalidate each other's token.
+        self._token_lock = threading.Lock()
+
     # =========================================================================
     # Authentication
     # =========================================================================
-    
+
     def _get_token(self) -> str:
         """
         Get or refresh authentication token.
         Tries multiple token endpoints for compatibility.
         """
+        with self._token_lock:
+            return self._get_token_locked()
+
+    def _refresh_token(self, stale_token: str) -> str:
+        """
+        Force a token refresh, but only once per stale token.
+
+        Concurrent 401s would otherwise each clear the token and fetch their
+        own replacement; whichever thread wrote last would win while the others
+        carried a token they had already discarded.
+        """
+        with self._token_lock:
+            if self._token and self._token != stale_token:
+                return self._token  # another thread already refreshed
+            self._token = None
+            return self._get_token_locked()
+
+    def _get_token_locked(self) -> str:
         now = time.time()
-        
+
         # Return cached token if still valid
         if self._token and now < self._token_exp - 30:
             return self._token
-        
+
+
         # Try multiple token endpoints
         endpoints = [
             "/api/v1/auth/token",
@@ -210,8 +234,8 @@ class JamfClient:
                 # Handle 401 - token expired
                 if response.status_code == 401:
                     logger.warning(f"401 Unauthorized (attempt {attempt}). Refreshing token...")
-                    self._token = None
-                    headers["Authorization"] = f"Bearer {self._get_token()}"
+                    stale = headers.get("Authorization", "")[len("Bearer "):]
+                    headers["Authorization"] = f"Bearer {self._refresh_token(stale)}"
                     continue
                 
                 # Handle 429 - rate limit

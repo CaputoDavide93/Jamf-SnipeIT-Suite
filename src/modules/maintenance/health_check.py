@@ -12,6 +12,7 @@ Detects:
 Posts a single Slack summary. Silent if no issues.
 """
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -24,6 +25,11 @@ from core.client_factory import (
 from clients.azure import AzureClient
 
 logger = logging.getLogger(__name__)
+
+SKIP_LOCAL_USERS = {
+    "admin", "administrator", "root", "daemon", "nobody", "xdesign",
+    "createfuture", "_mbsetupuser", "_spotlight", "guest", "jamfadmin",
+}
 
 
 class HealthCheckModule:
@@ -57,6 +63,8 @@ class HealthCheckModule:
             "stale_pending": [],
             "orphan_users": [],
             "invalid_in_stock": [],
+            "scan_errors": [],
+            "errors": 0,
         }
 
         # Data load
@@ -69,11 +77,6 @@ class HealthCheckModule:
             f"Azure inactive: {len(inactive_emails)}"
         )
 
-        snipe_serials: Set[str] = {
-            (a.get("serial") or "").upper() for a in all_assets if a.get("serial")
-        }
-        users_by_id = {u["id"]: u for u in all_users}
-
         # Build normalised username lookup (active only)
         by_norm = {}
         for u in all_users:
@@ -83,6 +86,24 @@ class HealthCheckModule:
             un = un.replace(".", "").replace("-", "").replace("_", "")
             if un:
                 by_norm.setdefault(un, []).append(u)
+
+        jamf_by_serial, jamf_local_norms, scan_errors, scanned_devices = (
+            self._build_jamf_indexes()
+        )
+        results["scan_errors"] = scan_errors
+        error_ratio = len(scan_errors) / max(1, scanned_devices)
+        threshold = float(
+            self.config.modules.get("health_check", {}).get(
+                "scan_error_ratio_threshold", 0.1
+            )
+        )
+        if scan_errors and error_ratio >= threshold:
+            results["errors"] = len(scan_errors)
+            logger.error(
+                "Jamf health index degraded: %d/%d detail fetches failed",
+                len(scan_errors),
+                scanned_devices,
+            )
 
         # ----- 1. In Stock + assigned (invalid) -----
         logger.info("[2/5] Scanning invalid states...")
@@ -143,11 +164,6 @@ class HealthCheckModule:
 
         # ----- 4. Stuck Pending (inactive owner + active local user) -----
         logger.info("[4/5] Scanning stuck Pending assets...")
-        SKIP_LOCAL = {
-            "admin", "administrator", "root", "daemon", "nobody", "xdesign",
-            "createfuture", "_mbsetupuser", "_spotlight", "guest", "jamfadmin",
-        }
-
         for a in all_assets:
             sl = a.get("status_label") or {}
             if not isinstance(sl, dict) or sl.get("name") != "Pending":
@@ -167,10 +183,7 @@ class HealthCheckModule:
             serial = (a.get("serial") or "").strip()
             if not serial:
                 continue
-            try:
-                jc = self.jamf.get_computer_by_serial(serial)
-            except Exception:
-                continue
+            jc = jamf_by_serial.get(serial.upper())
             if not jc:
                 continue
             ga = jc.get("groups_accounts", {}) or {}
@@ -183,7 +196,7 @@ class HealthCheckModule:
                 continue
             for u in lu:
                 un = (u.get("name") or u.get("username") or "").strip().lower()
-                if not un or un in SKIP_LOCAL or un.startswith("_"):
+                if not un or un in SKIP_LOCAL_USERS or un.startswith("_"):
                     continue
                 norm = un.replace(".", "").replace("-", "").replace("_", "")
                 for m in by_norm.get(norm, []):
@@ -215,75 +228,30 @@ class HealthCheckModule:
         # For each active user with 0 assets, does their normalised username appear as a Jamf local account?
         # We can't scan every Jamf device here (too slow) — use the reverse lookup:
         # load all Jamf computers' local accounts once, build set of uname_norm values.
-        jamf_local_norms: Set[str] = set()
-        try:
-            computers_basic = self.jamf.get_all_computers_basic()
-            for comp in computers_basic:
-                # Skip if no ID; we'll need details but only lightly — use get_computer_by_id lazily later
-                pass
-            # For orphan detection: more efficient to scan only users with 0 assets (usually small)
-            # Then query Jamf only for those
-            zero_asset_users = [
-                u for u in all_users
-                if u.get("id") not in assets_per_user
-                and not (u.get("name") or "").startswith("[Disabled]")
-                and (u.get("email") or "").lower() not in inactive_emails
-                and u.get("email")  # must have email
-            ]
-            logger.info(f"  {len(zero_asset_users)} users with 0 assets to check")
-
-            # Cache: build Jamf serial -> local account username set, scanning only devices where
-            # the location email matches a zero-asset user (fast path), OR fall back to scanning all.
-            # For simplicity and correctness, scan all devices once — cached in self._jamf_local_norms
-            if not hasattr(self, "_jamf_local_norms_cache"):
-                self._jamf_local_norms_cache = None
-            jln = self._jamf_local_norms_cache
-            if jln is None:
-                logger.info("  Building Jamf local account index (first run)...")
-                jln = set()
-                for comp in computers_basic:
-                    cid = comp.get("id")
-                    if not cid:
-                        continue
-                    try:
-                        d = self.jamf.get_computer_by_id(cid, subsets=["GroupsAccounts"])
-                    except Exception:
-                        continue
-                    if not d:
-                        continue
-                    c = d.get("computer", {}) or {}
-                    ga = c.get("groups_accounts", {}) or {}
-                    lu = ga.get("local_accounts") or ga.get("local_users") or []
-                    if isinstance(lu, dict) and "user" in lu:
-                        lu = lu["user"]
-                    elif isinstance(lu, dict):
-                        lu = [lu]
-                    if not isinstance(lu, list):
-                        continue
-                    for u in lu:
-                        un = (u.get("name") or u.get("username") or "").strip().lower()
-                        if not un or un in SKIP_LOCAL or un.startswith("_"):
-                            continue
-                        norm = un.replace(".", "").replace("-", "").replace("_", "")
-                        if norm:
-                            jln.add(norm)
-                self._jamf_local_norms_cache = jln
-                logger.info(f"  Built index: {len(jln)} unique normalized local accounts")
-
-            for u in zero_asset_users:
-                un = (u.get("username") or "").lower().split("@")[0]
-                un_norm = un.replace(".", "").replace("-", "").replace("_", "")
-                if un_norm and un_norm in jln:
-                    results["orphan_users"].append({
-                        "user_id": u.get("id"),
-                        "name": u.get("name"),
-                        "email": u.get("email"),
-                    })
-        except Exception as e:
-            logger.warning(f"Orphan scan failed: {e}")
+        zero_asset_users = [
+            user for user in all_users
+            if user.get("id") not in assets_per_user
+            and not (user.get("name") or "").startswith("[Disabled]")
+            and (user.get("email") or "").lower() not in inactive_emails
+            and user.get("email")
+        ]
+        logger.info(f"  {len(zero_asset_users)} users with 0 assets to check")
+        for user in zero_asset_users:
+            username = (user.get("username") or "").lower().split("@")[0]
+            username_norm = username.replace(".", "").replace("-", "").replace("_", "")
+            if username_norm and username_norm in jamf_local_norms:
+                results["orphan_users"].append({
+                    "user_id": user.get("id"),
+                    "name": user.get("name"),
+                    "email": user.get("email"),
+                })
 
         # ----- Summary -----
-        total = sum(len(v) for v in results.values())
+        issue_keys = (
+            "stuck_pending", "checked_out_to_disabled", "stale_pending",
+            "orphan_users", "invalid_in_stock",
+        )
+        total = sum(len(results[key]) for key in issue_keys)
         logger.info(
             f"=== Health check complete: {total} issues found "
             f"({len(results['stuck_pending'])} stuck, "
@@ -293,10 +261,84 @@ class HealthCheckModule:
             f"{len(results['invalid_in_stock'])} invalid) ==="
         )
 
-        if total > 0 and not dry_run and self.config.slack.notify_inline:
+        if (total > 0 or scan_errors) and not dry_run and self.config.slack.notify_inline:
             self._send_slack(results)
 
         return results
+
+    def _build_jamf_indexes(self) -> tuple[Dict[str, Dict], Set[str], List[Dict], int]:
+        """Fetch Jamf details once and build serial and local-account indexes."""
+        computers = self.jamf.get_all_computers_basic()
+        settings = self.config.modules.get("health_check", {})
+        max_workers = max(1, min(20, int(settings.get("max_workers", 8))))
+
+        def fetch(comp: Dict[str, Any]):
+            computer_id = comp.get("id")
+            if not computer_id:
+                return comp, None, "missing computer id"
+            try:
+                detail = self.jamf.get_computer_by_id(
+                    computer_id,
+                    subsets=["GroupsAccounts"],
+                )
+                return comp, detail, None
+            except Exception as exc:
+                return comp, None, str(exc)
+
+        by_serial: Dict[str, Dict] = {}
+        local_norms: Set[str] = set()
+        errors: List[Dict] = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            fetched = executor.map(fetch, computers)
+            for basic, detail, error in fetched:
+                if error:
+                    errors.append({"computer_id": basic.get("id"), "error": error})
+                    continue
+                if not detail:
+                    errors.append({
+                        "computer_id": basic.get("id"),
+                        "error": "empty detail response",
+                    })
+                    continue
+                computer = detail.get("computer", detail) or {}
+                serial = (
+                    basic.get("serial_number")
+                    or basic.get("serial")
+                    or computer.get("hardware", {}).get("serial_number")
+                    or ""
+                )
+                if serial:
+                    by_serial[str(serial).upper()] = computer
+
+                groups = computer.get("groups_accounts", {}) or {}
+                local_users = groups.get("local_accounts") or groups.get("local_users") or []
+                if isinstance(local_users, dict) and "user" in local_users:
+                    local_users = local_users["user"]
+                elif isinstance(local_users, dict):
+                    local_users = [local_users]
+                if not isinstance(local_users, list):
+                    continue
+                for local_user in local_users:
+                    username = (
+                        local_user.get("name") or local_user.get("username") or ""
+                    ).strip().lower()
+                    if (
+                        not username
+                        or username in SKIP_LOCAL_USERS
+                        or username.startswith("_")
+                    ):
+                        continue
+                    normalized = username.replace(".", "").replace("-", "").replace("_", "")
+                    if normalized:
+                        local_norms.add(normalized)
+
+        logger.info(
+            "  Jamf index: %d devices, %d local users, %d fetch errors",
+            len(by_serial),
+            len(local_norms),
+            len(errors),
+        )
+        return by_serial, local_norms, errors, len(computers)
 
     # ------------------------------------------------------------------
     def _load_azure_inactive(self) -> Set[str]:
@@ -334,6 +376,8 @@ class HealthCheckModule:
              lambda x: f"*{x['name']}* ({x['email']})"),
             ("Invalid state: In Stock + assigned", "invalid_in_stock",
              lambda x: f"`{x['serial']}` -> *{x['assigned']}*"),
+              ("Jamf devices not scanned", "scan_errors",
+               lambda x: f"ID `{x.get('computer_id', '?')}`: {x.get('error', 'unknown error')}"),
         ]
 
         for title, key, fmt in sections:

@@ -7,7 +7,7 @@ import argparse
 import sys
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from apscheduler.schedulers.blocking import BlockingScheduler
@@ -51,15 +51,25 @@ class ScheduledTaskRunner:
         self.config = config
         self.dry_run = dry_run
         self.logger = logging.getLogger('jamf-snipeit-scheduler')
+
+    def _effective_dry_run(self, module_name: str) -> Optional[bool]:
+        settings = self.config.get_module_settings(module_name)
+        if not settings.enabled:
+            self.logger.info("Skipping %s: disabled in configuration", module_name)
+            return None
+        return self.dry_run or settings.dry_run
     
     def run_leavers(self):
         """Scheduled task: Run Leavers module."""
         self.logger.info("="*60)
         self.logger.info("Starting scheduled task: Leavers")
         self.logger.info("="*60)
+        dry_run = self._effective_dry_run("leavers")
+        if dry_run is None:
+            return
         try:
             module = LeaversModule(self.config)
-            results = module.run(dry_run=self.dry_run)
+            results = module.run(dry_run=dry_run)
             self.logger.info(f"Leavers completed: {results.get('total_users', 0)} processed, "
                            f"{results.get('updated_assets', 0)} updated, {len(results.get('errors', []))} errors")
             module.close()
@@ -71,9 +81,12 @@ class ScheduledTaskRunner:
         self.logger.info("="*60)
         self.logger.info("Starting scheduled task: Snipe-to-Jamf")
         self.logger.info("="*60)
+        dry_run = self._effective_dry_run("snipe_to_jamf")
+        if dry_run is None:
+            return
         try:
             module = SnipeToJamfModule(self.config)
-            results = module.run(dry_run=self.dry_run)
+            results = module.run(dry_run=dry_run)
             self.logger.info(f"Snipe-to-Jamf completed: {results.get('total_processed', 0)} processed, "
                            f"{results.get('updated', 0)} updated, {results.get('errors', 0)} errors")
             module.close()
@@ -85,9 +98,12 @@ class ScheduledTaskRunner:
         self.logger.info("="*60)
         self.logger.info("Starting scheduled task: User Match")
         self.logger.info("="*60)
+        dry_run = self._effective_dry_run("user_match")
+        if dry_run is None:
+            return
         try:
             module = UserMatchModule(self.config)
-            results = module.run(dry_run=self.dry_run)
+            results = module.run(dry_run=dry_run)
             self.logger.info(f"User Match completed: {results.get('total_devices', 0)} processed, "
                            f"{results.get('assets_created', 0)} provisioned, {results.get('errors', 0)} errors")
             module.close()
@@ -99,9 +115,12 @@ class ScheduledTaskRunner:
         self.logger.info("="*60)
         self.logger.info("Starting scheduled task: Model Sync")
         self.logger.info("="*60)
+        dry_run = self._effective_dry_run("model_sync")
+        if dry_run is None:
+            return
         try:
             module = ModelSyncModule(self.config)
-            results = module.run(dry_run=self.dry_run)
+            results = module.run(dry_run=dry_run)
             self.logger.info(f"Model Sync completed: {results.get('total_processed', 0)} checked, "
                            f"{results.get('updated', 0)} updated, {results.get('errors', 0)} errors")
             module.close()
@@ -113,9 +132,12 @@ class ScheduledTaskRunner:
         self.logger.info("="*60)
         self.logger.info("Starting scheduled task: Self-Healing Correction")
         self.logger.info("="*60)
+        dry_run = self._effective_dry_run("correction")
+        if dry_run is None:
+            return
         try:
             module = CorrectionModule(self.config)
-            results = module.run(dry_run=self.dry_run)
+            results = module.run(dry_run=dry_run)
             self.logger.info(f"Correction completed: {results.get('total_assets_checked', 0)} checked, "
                            f"{results.get('mismatches_found', 0)} mismatches, "
                            f"{results.get('corrections_made', 0)} corrected, "
@@ -137,7 +159,7 @@ class ScheduledTaskRunner:
         self.logger.info("All scheduled tasks completed")
 
 
-def create_scheduler(config: Config, dry_run: bool = False) -> "BlockingScheduler":
+def create_scheduler(config: Config, dry_run: bool = False) -> Any:
     """Create and configure the APScheduler."""
     if not APSCHEDULER_AVAILABLE:
         raise ImportError("APScheduler is not installed. Install with: pip install apscheduler")

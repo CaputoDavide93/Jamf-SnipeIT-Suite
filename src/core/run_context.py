@@ -1,9 +1,4 @@
-"""
-Jamf-SnipeIT Suite - Run Context (Shared Data Bus)
-Caches expensive API fetches so multiple modules in the same startup
-run can share users, assets, and computers without re-fetching.
-Also collects per-module execution metrics and errors.
-"""
+"""Per-run module metrics and error collection."""
 import logging
 import time
 from dataclasses import dataclass, field
@@ -57,84 +52,19 @@ class ModuleMetrics:
         }
 
 
-# =========================================================================
-# Shared data bus
-# =========================================================================
-
 class RunContext:
     """
-    Shared data bus passed through a single startup / scheduled run.
+    Accumulates per-module metrics and errors for one startup run.
 
-    Lazily caches bulk API responses so downstream modules skip redundant
-    fetches.  Also accumulates per-module metrics and errors for the
-    summary / Slack notification at the end of the run.
+    Platform data is intentionally not shared between modules: modules earlier
+    in the chain mutate users and assets, so downstream modules must refetch
+    authoritative state instead of observing a stale run-level cache.
     """
 
     def __init__(self) -> None:
-        self._snipe_users: Optional[List[Dict]] = None
-        self._snipe_assets: Optional[List[Dict]] = None
-        self._serial_map: Optional[Dict[str, Dict]] = None
-        self._jamf_computers_basic: Optional[List[Dict]] = None
-
         self.metrics: Dict[str, ModuleMetrics] = {}
         self.errors: List[Dict[str, Any]] = []
         self.run_start: datetime = datetime.now()
-
-    # ----- lazy getters -----
-
-    def get_snipe_users(self, snipe_client: Any) -> List[Dict]:
-        """Get (or cache) all Snipe-IT users."""
-        if self._snipe_users is None:
-            logger.info("[RunContext] Fetching all Snipe-IT users (shared cache)…")
-            self._snipe_users = snipe_client.get_all_users()
-            logger.info(f"[RunContext] Cached {len(self._snipe_users)} Snipe-IT users")
-        return self._snipe_users
-
-    def get_snipe_assets(self, snipe_client: Any) -> List[Dict]:
-        """Get (or cache) all Snipe-IT assets."""
-        if self._snipe_assets is None:
-            logger.info("[RunContext] Fetching all Snipe-IT assets (shared cache)…")
-            self._snipe_assets = snipe_client.get_all_assets()
-            logger.info(f"[RunContext] Cached {len(self._snipe_assets)} Snipe-IT assets")
-        return self._snipe_assets
-
-    def get_serial_map(self, snipe_client: Any) -> Dict[str, Dict]:
-        """Get (or build) serial→asset map from cached assets."""
-        if self._serial_map is None:
-            assets = self.get_snipe_assets(snipe_client)
-            self._serial_map = {}
-            for a in assets:
-                serial = (a.get("serial") or "").strip().upper()
-                if serial:
-                    self._serial_map[serial] = a
-            logger.info(f"[RunContext] Built serial map with {len(self._serial_map)} entries")
-        return self._serial_map
-
-    def get_jamf_basic(self, jamf_client: Any) -> List[Dict]:
-        """Get (or cache) basic Jamf computer list."""
-        if self._jamf_computers_basic is None:
-            logger.info("[RunContext] Fetching basic Jamf computer list (shared cache)…")
-            self._jamf_computers_basic = jamf_client.get_all_computers_basic()
-            logger.info(f"[RunContext] Cached {len(self._jamf_computers_basic)} Jamf computers")
-        return self._jamf_computers_basic
-
-    # ----- cache invalidation -----
-
-    def invalidate(self, key: Optional[str] = None) -> None:
-        """Clear cached data.  Pass a key ('snipe_users', 'snipe_assets',
-        'serial_map', 'jamf_basic') to clear a specific cache, or None
-        to clear everything."""
-        targets = {
-            "snipe_users": "_snipe_users",
-            "snipe_assets": "_snipe_assets",
-            "serial_map": "_serial_map",
-            "jamf_basic": "_jamf_computers_basic",
-        }
-        if key is None:
-            for attr in targets.values():
-                setattr(self, attr, None)
-        elif key in targets:
-            setattr(self, targets[key], None)
 
     # ----- metrics helpers -----
 

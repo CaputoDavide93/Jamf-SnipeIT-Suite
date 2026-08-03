@@ -1,5 +1,3 @@
-<div align="center">
-
 # 🔄 Jamf-SnipeIT Suite
 
 **Unattended asset-lifecycle automation across Jamf Pro, Snipe-IT, Azure AD / Entra ID, and HiBob — serverless on AWS Fargate**
@@ -9,8 +7,6 @@
 ![AWS Fargate](https://img.shields.io/badge/AWS-Fargate-FF9900?logo=amazonwebservices&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 [![CI](https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite/actions/workflows/ci.yml/badge.svg)](https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite/actions/workflows/ci.yml)
-
-</div>
 
 ---
 
@@ -37,7 +33,8 @@
 
 ## 🎯 Overview
 
-Keeping an asset register truthful across four systems of record is a losing manual battle: people join, leave, change surname, convert from contract to permanent, and sometimes come back a day after being offboarded. Each of those events touches Jamf (device management), Snipe-IT (asset register), Azure AD (identity), and HiBob (HR truth) — and any drift between them means lost laptops, ghost users, and wrong audit answers.
+Keeping an asset register truthful across four systems of record is a losing manual battle: people join, leave, change surname, convert from contract to permanent, and sometimes come back a day after being offboarded.
+Each event touches Jamf (device management), Snipe-IT (asset register), Azure AD (identity), and HiBob (HR truth), and any drift between them means lost laptops, ghost users, and wrong audit answers.
 
 This suite closes the loop automatically:
 
@@ -124,7 +121,7 @@ flowchart LR
 ### CLI command inventory
 
 <!-- AUTOGEN:modules -->
-_22 CLI commands, generated from `src/main.py` by `tools/gen_modules_doc.py` — do not edit by hand._
+*22 CLI commands, generated from `src/main.py` by `tools/gen_modules_doc.py` — do not edit by hand.*
 
 | Command | What it does | Scheduler default (cron) |
 |---------|--------------|---------------------------|
@@ -235,11 +232,20 @@ Key settings:
 |---------|---------|
 | `azure.starters_group_id` | AAD group of active staff to provision (active-users-only group) |
 | `azure.leavers_group_id` / `disabled_group_id` | Leaver signals for lifecycle modules |
-| `modules.rehire_detection.dry_run` | 🔒 Safety latch — config can only force dry-run **on**, never off |
+| `modules.<name>.enabled` | Skip a module across direct CLI, `run-group`, `all`, and scheduler execution |
+| `modules.<name>.dry_run` | Force that module into dry-run; callers cannot force it back to live |
+| `modules.rehire_detection.dry_run` | 🔒 Rehire safety latch — defaults to dry-run until explicitly disabled |
 | `modules.rehire_detection.hibob_confirmation` | Require HiBob (read-only) to confirm re-hires |
 | `modules.user_enrichment.mark_contractors` | Persist AAD `Contractor` department as a Snipe-IT marker |
+| `modules.ai_audit.allow_external_pii` | Opt in to raw identifiers in external AI prompts; default payloads are tokenised |
+| `modules.health_check.max_workers` | Bounded concurrency for the shared Jamf health index (default `8`) |
 | `matching.skip_usernames` | Shared/test local accounts to ignore |
 | `config/user_overrides.json` | 🚫 Local-only (gitignored, PII) — manual match overrides, baked into the image at build time |
+
+Env-only deployments use `MODULE_<CANONICAL_NAME>_ENABLED` and
+`MODULE_<CANONICAL_NAME>_DRY_RUN`, for example
+`MODULE_USER_MATCH_DRY_RUN=true`. Terraform exposes the same controls through
+`module_enabled_overrides` and `module_dry_run_overrides` maps.
 
 ## 🚀 Usage
 
@@ -256,7 +262,7 @@ python src/main.py health-check
 # Everything in dependency order
 python src/main.py all
 
-# Container: scheduler with NOW menu + /health endpoint
+# Container: scheduler with NOW menu + /healthz liveness endpoint
 RUN_MODE=scheduler python src/docker_scheduler.py --config config/config.yaml
 ```
 
@@ -264,7 +270,7 @@ Every mutating command accepts `--dry-run` / `-n` and prints exactly what it *wo
 
 ## ☁️ Production Deployment (AWS)
 
-Production runs as **four EventBridge rules → one Fargate task definition** (`RUN_MODE` decides the module set). The task reads secrets from SSM at start; the image ships from ECR.
+Production runs as **five EventBridge rules → one Fargate task definition** (`RUN_MODE` decides the module set). The task reads secrets from SSM at start; the image ships from ECR.
 
 ```bash
 # 1. ECR login (12h token)
@@ -285,8 +291,9 @@ docker push <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-
 
 | Guard | Protects against |
 |-------|------------------|
-| 🔒 Distributed `RunMutex` (SSM) on **every** job | Overlapping runs reverting each other's work |
+| 🔒 Fail-closed distributed `RunMutex` (SSM) on **every** job | Overlapping or unlocked runs reverting each other's work |
 | 🧪 Dry-run safety latch on new modules | A new module going live before its output is reviewed |
+| 🕶️ Tokenised AI-audit payloads by default | Employee and device identifiers leaving the trust boundary |
 | 🤝 4-signal re-hire confirmation incl. HiBob | Un-ghosting someone who is actually leaving |
 | 🙋 Ambiguous-case human queue (Slack) | Automated guesses on people's employment state |
 | 🧯 Fetch-integrity aborts | An empty API response triggering mass duplicate creation |
@@ -336,4 +343,4 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the suite on ev
 
 ---
 
-<p align="center">⭐ <b>If this tool helped you, please give it a star!</b> ⭐&ensp;·&ensp;<sub>Made with ❤️ by <a href="https://github.com/CaputoDavide93">Davide Caputo</a></sub></p>
+**If this tool helped you, please give it a star.** Made by [Davide Caputo](https://github.com/CaputoDavide93).

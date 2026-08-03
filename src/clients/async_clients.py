@@ -13,6 +13,32 @@ from datetime import datetime, timedelta
 logger = logging.getLogger('jamf-snipeit-async')
 
 
+class BatchFetchError(RuntimeError):
+    """Raised when a concurrent batch returns a mixture of results and errors."""
+
+    def __init__(self, resource: str, failed_ids: List[int], partial_results: List[Dict]):
+        self.resource = resource
+        self.failed_ids = failed_ids
+        self.partial_results = partial_results
+        super().__init__(f"Failed to fetch {resource} IDs: {failed_ids}")
+
+
+def _validated_batch_results(
+    resource: str,
+    item_ids: List[int],
+    results: List[Any],
+) -> List[Dict]:
+    partial_results = [result for result in results if isinstance(result, dict)]
+    failed_ids = [
+        item_id
+        for item_id, result in zip(item_ids, results)
+        if isinstance(result, BaseException) or not isinstance(result, dict)
+    ]
+    if failed_ids:
+        raise BatchFetchError(resource, failed_ids, partial_results)
+    return partial_results
+
+
 @dataclass
 class AsyncConfig:
     """Configuration for async operations."""
@@ -153,9 +179,7 @@ class AsyncJamfClient:
         """Get multiple computers concurrently."""
         tasks = [self.get_computer(cid) for cid in computer_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Filter out exceptions
-        return [r for r in results if isinstance(r, dict)]
+        return _validated_batch_results("computer", computer_ids, results)
     
     async def get_all_computers_basic(self) -> List[Dict]:
         """Get basic info for all computers."""
@@ -256,8 +280,7 @@ class AsyncSnipeClient:
         """Get multiple assets concurrently."""
         tasks = [self.get_asset(aid) for aid in asset_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        return [r for r in results if isinstance(r, dict)]
+        return _validated_batch_results("asset", asset_ids, results)
     
     async def get_all_assets(self, limit: int = 500) -> List[Dict]:
         """Get all assets with pagination."""

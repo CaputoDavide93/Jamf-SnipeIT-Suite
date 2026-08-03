@@ -103,6 +103,7 @@ class AzureClient:
             RuntimeError: If all retries fail
         """
         last_error = None
+        last_response = None
         
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -114,9 +115,12 @@ class AzureClient:
                     json=json_data,
                     timeout=self.timeout,
                 )
+                last_response = response
                 
                 # Handle rate limiting (429)
                 if response.status_code == 429:
+                    if attempt >= self.max_retries:
+                        break
                     retry_after_header = response.headers.get("Retry-After")
                     try:
                         retry_after = min(int(retry_after_header), 120) if retry_after_header else self.retry_delay * attempt
@@ -135,6 +139,8 @@ class AzureClient:
 
                 # Handle server errors (5xx) with retry
                 if response.status_code >= 500:
+                    if attempt >= self.max_retries:
+                        break
                     delay = self.retry_delay * (2 ** (attempt - 1))
                     logger.warning(f"Graph API server error {response.status_code}. Retrying in {delay}s (attempt {attempt})")
                     time.sleep(delay)
@@ -152,7 +158,15 @@ class AzureClient:
                 else:
                     logger.error(f"Graph API request failed after {self.max_retries} attempts")
         
-        raise RuntimeError(f"Graph API request failed after {self.max_retries} retries: {last_error}")
+        if last_response is not None:
+            body = (last_response.text or "").strip().replace("\n", " ")[:500]
+            raise RuntimeError(
+                f"Graph API request failed after {self.max_retries} attempts: "
+                f"HTTP {last_response.status_code}: {body or '<empty body>'}"
+            )
+        raise RuntimeError(
+            f"Graph API request failed after {self.max_retries} attempts: {last_error}"
+        )
     
     # =========================================================================
     # Authentication

@@ -69,6 +69,9 @@ case "$RUN_MODE" in
         
         # Run specific command passed as arguments
         if [ $# -gt 0 ]; then
+            if [ -n "$DRY_RUN_FLAG" ] && [ "$1" != "health-server" ]; then
+                exec python -u /app/src/main.py "$@" "$DRY_RUN_FLAG"
+            fi
             exec python -u /app/src/main.py "$@"
         else
             echo "Usage: docker run <image> cli <command>"

@@ -33,5 +33,24 @@ hibob_service_user_token = ""
 # -- AI Resolver (optional) --
 ai_api_key = ""
 
+# -- Per-module safety controls (optional) --
+# Rehire restoration is read-only until explicitly set to false. Production
+# has been live since task-def rev 6, so the prod default is already false —
+# a NEW environment should start at true and flip it only after reviewing a
+# dry-run's output.
+rehire_detection_dry_run = false
+mark_contractors         = true
+
+# module_enabled_overrides = {
+#   ai_audit = false
+# }
+# module_dry_run_overrides = {
+#   cleanup    = true
+#   user_match = true
+# }
+# ai_audit_allow_external_pii = false
+# health_check_max_workers = 8
+# health_check_scan_error_ratio_threshold = 0.1
+
 # -- Monitoring (optional — leave empty for no alarms) --
 alarm_email = ""

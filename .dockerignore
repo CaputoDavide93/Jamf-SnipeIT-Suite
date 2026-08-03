@@ -35,6 +35,11 @@ env/
 
 # Configuration with secrets
 config/config.yaml
+config/config.yaml.*
+config/*.sb-*
+*.secrets
+*.env
+.env*
 
 # Logs and output
 logs/

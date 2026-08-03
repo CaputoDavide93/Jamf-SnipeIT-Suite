@@ -18,6 +18,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.state import atomic_write_json, backup_corrupt_json
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -145,15 +147,18 @@ class AIResolver:
                 with open(_CACHE_PATH, "r") as f:
                     self._cache = json.load(f)
         except Exception as e:
-            logger.debug(f"AI cache load failed: {e}")
+            backup = backup_corrupt_json(_CACHE_PATH)
+            logger.warning(
+                "AI cache load failed: %s; preserved as %s",
+                e,
+                backup or "<backup failed>",
+            )
             self._cache = {}
 
     def _save_cache(self) -> None:
         """Persist cache to disk (and S3 if configured)."""
         try:
-            _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(_CACHE_PATH, "w") as f:
-                json.dump(self._cache, f)
+            atomic_write_json(_CACHE_PATH, self._cache)
         except Exception as e:
             logger.debug(f"AI cache save failed: {e}")
             return

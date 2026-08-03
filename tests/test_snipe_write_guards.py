@@ -135,10 +135,29 @@ def test_expired_lock_is_reclaimed():
     assert ssm.store["/test/mutex"].startswith(m._owner)
 
 
-def test_malformed_lock_value_is_treated_as_expired():
+def test_malformed_lock_value_is_not_reclaimed():
     ssm = FakeSSM({"/test/mutex": "garbage-no-pipe"})
     m = _mutex(ssm)
-    assert m.acquire() is True
+    assert m.acquire() is False
+    assert ssm.deleted == []
+
+
+def test_unparseable_lock_expiry_is_not_reclaimed():
+    ssm = FakeSSM({"/test/mutex": "some-owner|not-a-date"})
+    m = _mutex(ssm)
+    assert m.acquire() is False
+    assert ssm.deleted == []
+
+
+def test_unreadable_lock_is_not_reclaimed():
+    class UnreadableSSM(FakeSSM):
+        def get_parameter(self, Name):
+            raise RuntimeError("SSM unavailable")
+
+    ssm = UnreadableSSM({"/test/mutex": "some-owner|unknown"})
+    m = _mutex(ssm)
+    assert m.acquire() is False
+    assert ssm.deleted == []
 
 
 def test_release_does_not_delete_a_lock_owned_by_someone_else():

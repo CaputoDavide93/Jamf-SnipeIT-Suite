@@ -5,12 +5,42 @@ Persists last-run timestamps and a dead-letter queue for failed operations.
 import json
 import logging
 import os
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def atomic_write_json(path: Path, data: Any, *, indent: Optional[int] = None) -> None:
+    """Durably replace a JSON file without exposing a partially-written file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as temp_file:
+            json.dump(data, temp_file, indent=indent, default=str)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def backup_corrupt_json(path: Path) -> Optional[Path]:
+    """Move unreadable JSON aside for diagnosis and return its backup path."""
+    if not path.exists():
+        return None
+    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
+    backup = path.with_name(f"{path.name}.corrupt-{timestamp}")
+    try:
+        os.replace(path, backup)
+        return backup
+    except OSError as exc:
+        logger.error("Could not preserve corrupt JSON %s: %s", path, exc)
+        return None
 
 
 # =========================================================================
@@ -46,16 +76,19 @@ class SyncState:
                     self._data = json.load(f)
                 logger.debug(f"Loaded sync state from {self._path}")
             except (json.JSONDecodeError, OSError) as exc:
-                logger.warning(f"Could not load sync state: {exc}; starting fresh")
+                backup = backup_corrupt_json(self._path)
+                logger.warning(
+                    "Could not load sync state: %s; preserved as %s",
+                    exc,
+                    backup or "<backup failed>",
+                )
                 self._data = {}
         else:
             self._path.parent.mkdir(parents=True, exist_ok=True)
 
     def _save(self) -> None:
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._path, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, indent=2, default=str)
+            atomic_write_json(self._path, self._data, indent=2)
         except OSError as exc:
             logger.error(f"Failed to save sync state: {exc}")
 
@@ -128,16 +161,20 @@ class RetryQueue:
             try:
                 with open(self._path, "r", encoding="utf-8") as f:
                     self._items = json.load(f)
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as exc:
+                backup = backup_corrupt_json(self._path)
+                logger.warning(
+                    "Could not load retry queue: %s; preserved as %s",
+                    exc,
+                    backup or "<backup failed>",
+                )
                 self._items = []
         else:
             self._path.parent.mkdir(parents=True, exist_ok=True)
 
     def _save(self) -> None:
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._path, "w", encoding="utf-8") as f:
-                json.dump(self._items, f, indent=2, default=str)
+            atomic_write_json(self._path, self._items, indent=2)
         except OSError as exc:
             logger.error(f"Failed to save retry queue: {exc}")
 

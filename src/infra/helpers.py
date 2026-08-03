@@ -14,6 +14,42 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+def result_error_count(results: Any) -> int:
+    """Normalize the error conventions used by module result dictionaries."""
+    if not isinstance(results, dict):
+        return 0
+    errors = results.get("errors", 0)
+    if isinstance(errors, list):
+        count = len(errors)
+    else:
+        try:
+            count = int(errors or 0)
+        except (TypeError, ValueError):
+            count = 1
+    # pending-reconciliation and jamf-location-cleanup report write failures
+    # under "failures", not "errors"; without this their failures never reach
+    # the exit code the caller derives from this count.
+    failures = results.get("failures", 0)
+    if not isinstance(failures, bool) and isinstance(failures, (int, float)):
+        count += int(failures)
+    elif isinstance(failures, list):
+        count += len(failures)
+
+    if results.get("error") and count == 0:
+        count = 1
+    return count
+
+
+def status_id(value: Any) -> Optional[int]:
+    """Extract a numeric Snipe status ID from dict, integer, or string shapes."""
+    if isinstance(value, dict):
+        value = value.get("id")
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 # =============================================================================
 # Azure AD helpers
 # =============================================================================

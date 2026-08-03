@@ -111,15 +111,80 @@ variable "azure_starters_group_id" {
 
 # -- Feature flags --
 variable "rehire_detection_dry_run" {
-  type        = string
-  description = "'true' keeps rehire detection in dry-run (safety latch); 'false' lets it apply changes"
-  default     = "false"
+  type        = bool
+  description = "Keeps rehire detection in dry-run until explicitly disabled"
+  default     = true
 }
 
 variable "mark_contractors" {
-  type        = string
-  description = "'true' appends the 'Contractor (Azure AD)' marker during user enrichment"
-  default     = "true"
+  type        = bool
+  description = "Appends the 'Contractor (Azure AD)' marker during user enrichment"
+  default     = true
+}
+
+variable "module_enabled_overrides" {
+  type        = map(bool)
+  description = "Per-module enabled overrides, keyed by canonical module name"
+  default     = {}
+  validation {
+    condition = alltrue([
+      for name in keys(var.module_enabled_overrides) : contains([
+        "azure_starters", "user_enrichment", "peripherals_sync", "correction",
+        "user_match", "snipe_to_jamf", "rehire_detection", "leavers",
+        "model_sync", "cleanup", "username_standardize", "ai_audit",
+        "reconciliation", "health_check", "pending_reconciliation",
+        "jamf_location_cleanup", "monthly_digest", "wakeup",
+      ], name)
+    ])
+    error_message = "module_enabled_overrides keys must be canonical module names."
+  }
+}
+
+variable "module_dry_run_overrides" {
+  type        = map(bool)
+  description = "Per-module dry-run overrides, keyed by canonical module name"
+  default     = {}
+  validation {
+    condition = alltrue([
+      for name in keys(var.module_dry_run_overrides) : contains([
+        "azure_starters", "user_enrichment", "peripherals_sync", "correction",
+        "user_match", "snipe_to_jamf", "rehire_detection", "leavers",
+        "model_sync", "cleanup", "username_standardize", "ai_audit",
+        "reconciliation", "health_check", "pending_reconciliation",
+        "jamf_location_cleanup", "monthly_digest", "wakeup",
+      ], name)
+    ])
+    error_message = "module_dry_run_overrides keys must be canonical module names."
+  }
+}
+
+variable "ai_audit_allow_external_pii" {
+  type        = bool
+  description = "Explicitly allow names, emails, serials, and IDs in external AI audit prompts"
+  default     = false
+}
+
+variable "health_check_max_workers" {
+  type        = number
+  description = "Maximum concurrent Jamf detail requests during health checks"
+  default     = 8
+  validation {
+    condition     = var.health_check_max_workers >= 1 && var.health_check_max_workers <= 20
+    error_message = "health_check_max_workers must be between 1 and 20."
+  }
+}
+
+variable "health_check_scan_error_ratio_threshold" {
+  type        = number
+  description = "Failed Jamf detail-request ratio that marks a health scan failed"
+  default     = 0.1
+  validation {
+    condition = (
+      var.health_check_scan_error_ratio_threshold >= 0 &&
+      var.health_check_scan_error_ratio_threshold <= 1
+    )
+    error_message = "health_check_scan_error_ratio_threshold must be between 0 and 1."
+  }
 }
 
 # -- Matching --

@@ -226,6 +226,19 @@ class Config:
         def _env(name: str, default: str = "") -> str:
             return os.environ.get(name, default)
 
+        def _env_bool(name: str, default: bool) -> bool:
+            value = _env(name)
+            if not value:
+                return default
+            return value.strip().lower() in ("1", "true", "yes", "on")
+
+        def _module_controls(name: str, dry_run_default: bool = False) -> Dict[str, bool]:
+            prefix = f"MODULE_{name.upper()}"
+            return {
+                "enabled": _env_bool(f"{prefix}_ENABLED", True),
+                "dry_run": _env_bool(f"{prefix}_DRY_RUN", dry_run_default),
+            }
+
         return {
             "jamf": {
                 "base_url": _env("JAMF_BASE_URL"),
@@ -292,24 +305,55 @@ class Config:
             "scheduler": {"enabled": False, "run_on_startup": True},
             "modules": {
                 "model_sync": {
-                    "enabled": True,
+                    **_module_controls("model_sync"),
                     "default_category_id": int(_env("MODEL_SYNC_CATEGORY_ID", "2")),
                     "auto_create_models": True,
                     "auto_create_manufacturers": True,
                 },
                 "peripherals_sync": {
+                    **_module_controls("peripherals_sync"),
                     "accessory_category_id": int(_env("PERIPHERALS_CATEGORY_ID", "4")),
                     "equipment_mapping_file": "config/equipment_mapping.json",
                 },
                 # Safety latch: dry_run defaults true, so rehire detection makes
                 # no changes until REHIRE_DETECTION_DRY_RUN is explicitly "false".
                 "rehire_detection": {
-                    "dry_run": _env("REHIRE_DETECTION_DRY_RUN", "true").strip().lower() != "false",
+                    **_module_controls("rehire_detection", dry_run_default=True),
+                    "dry_run": _env_bool(
+                        "MODULE_REHIRE_DETECTION_DRY_RUN",
+                        _env("REHIRE_DETECTION_DRY_RUN", "true").strip().lower() != "false",
+                    ),
                 },
                 # Contractor marking is off unless MARK_CONTRACTORS is "true".
                 "user_enrichment": {
+                    **_module_controls("user_enrichment"),
                     "mark_contractors": _env("MARK_CONTRACTORS", "false").strip().lower() == "true",
                 },
+                "ai_audit": {
+                    **_module_controls("ai_audit"),
+                    "allow_external_pii": _env(
+                        "AI_AUDIT_ALLOW_EXTERNAL_PII", "false"
+                    ).strip().lower() == "true",
+                },
+                "azure_starters": _module_controls("azure_starters"),
+                "correction": _module_controls("correction"),
+                "user_match": _module_controls("user_match"),
+                "snipe_to_jamf": _module_controls("snipe_to_jamf"),
+                "leavers": _module_controls("leavers"),
+                "cleanup": _module_controls("cleanup"),
+                "username_standardize": _module_controls("username_standardize"),
+                "reconciliation": _module_controls("reconciliation"),
+                "health_check": {
+                    **_module_controls("health_check"),
+                    "max_workers": int(_env("HEALTH_CHECK_MAX_WORKERS", "8")),
+                    "scan_error_ratio_threshold": float(
+                        _env("HEALTH_CHECK_SCAN_ERROR_RATIO_THRESHOLD", "0.1")
+                    ),
+                },
+                "pending_reconciliation": _module_controls("pending_reconciliation"),
+                "jamf_location_cleanup": _module_controls("jamf_location_cleanup"),
+                "monthly_digest": _module_controls("monthly_digest"),
+                "wakeup": _module_controls("wakeup"),
             },
         }
 
@@ -463,7 +507,7 @@ class Config:
         return HiBobConfig(
             service_user_id=data.get("service_user_id", ""),
             service_user_token=data.get("service_user_token", ""),
-            base_url=data.get("base_url", "https://api.hibob.com/v1"),
+            base_url=data.get("base_url") or data.get("api_url", "https://api.hibob.com/v1"),
         )
     
     def get_module_settings(self, module_name: str) -> ModuleSettings:

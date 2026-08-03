@@ -84,9 +84,9 @@ When matching consistently picks the wrong Snipe-IT user for a given Jamf local 
      }
    }
    ```
-2. Rebuild the Docker image and push to ECR (see [Deploying a new image](#deploying-a-new-image) below).
-3. Commit the change to git.
-4. The next 06:00 run will use the new override immediately.
+2. Keep the file local; it contains PII and is intentionally gitignored.
+3. Rebuild the Docker image and push to ECR. The build includes the override when present, while secret YAML files remain excluded by `.dockerignore`.
+4. The next scheduled run will use the override.
 
 **Normalisation rules:** keys are matched case-insensitive and dot/dash/underscore-insensitive. `matt-personal` and `matt.personal` and `MATTPERSONAL` all match the same override key.
 
@@ -118,6 +118,27 @@ To run in dry-run mode, add:
 ```bash
   --overrides '{"containerOverrides":[{"name":"app","environment":[{"name":"DRY_RUN","value":"true"}]}]}'
 ```
+
+Scheduler dry-run applies to the startup chain, every later APScheduler job,
+and EventBridge CLI/`run-group` commands. A module's own
+`modules.<name>.dry_run: true` setting can also force dry-run and cannot be
+overridden by the caller.
+
+For persistent Fargate controls, set maps in `terraform.tfvars` and apply a new
+task-definition revision:
+
+```hcl
+module_enabled_overrides = {
+  ai_audit = false
+}
+module_dry_run_overrides = {
+  cleanup    = true
+  user_match = true
+}
+```
+
+Canonical names use underscores. Terraform converts these to
+`MODULE_<NAME>_ENABLED` and `MODULE_<NAME>_DRY_RUN` task environment variables.
 
 ### Viewing logs
 
@@ -218,9 +239,12 @@ task with a `containerOverrides.command` so the entrypoint dispatches to the
 right CLI subcommand or `run-group`.
 
 **Scheduling safety**
-- Each run grabs a mutex in SSM and now refreshes it periodically so long runs stay protected.
+- Each run grabs a mutex in SSM and refreshes it periodically so long runs stay protected. Missing credentials, IAM denial, or SSM failure aborts the run.
+- The startup/run-once chain checks Snipe-IT, Jamf, and Azure before constructing modules. Any failed critical probe blocks the chain and returns a failed task status.
+- Local development without AWS must opt out explicitly with `MUTEX_DISABLED=true`; never set this in ECS.
 - APScheduler jobs have a small random `jitter` (default 180s) to avoid hitting APIs in a single burst when multiple jobs are adjacent.
-- Health server binds to `127.0.0.1` by default; set `HEALTH_AUTH_TOKEN` if exposing it via a sidecar/ALB.
+- `/healthz` is the unauthenticated container liveness probe. Set `HEALTH_AUTH_TOKEN` to protect `/health`, readiness, status, and metrics when exposing them through a sidecar/ALB.
+- AI audit identifiers are tokenised by default. Raw transfer requires `AI_AUDIT_ALLOW_EXTERNAL_PII=true` or `modules.ai_audit.allow_external_pii: true` and an approved data-processing policy.
 
 | EventBridge rule | Cron (UTC) | UK time | Modules executed |
 |------------------|------------|---------|------------------|
@@ -228,6 +252,7 @@ right CLI subcommand or `run-group`.
 | `…-sync`         | Tue 17:00  | Tue 18:00 BST | run-once: model-sync, correction, user-match, snipe-to-jamf, leavers (+ starters/enrichment/peripherals re-run) |
 | `…-health`       | Mon+Thu 19:00 | 20:00 BST | health-check |
 | `…-housekeeping` | Sun 21:00  | Sun 22:00 BST | cleanup → username-standardize → ai-audit → reconciliation |
+| `…-monthly-digest` | First Mon 09:00 | 10:00 BST | monthly-digest |
 
 `wakeup` is intentionally manual — invoke via CLI or interactive menu.
 
@@ -241,7 +266,7 @@ collide.
 
 Disable every EventBridge rule:
 ```bash
-for r in starters sync health housekeeping; do
+for r in starters sync health housekeeping monthly-digest; do
   aws events disable-rule --name jamf-snipeit-suite-prod-$r --region eu-west-1
 done
 ```

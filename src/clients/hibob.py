@@ -69,7 +69,7 @@ class HiBobClient:
         """Make an API request with retries."""
         url = f"{self.api_base}{path}"
 
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(self.max_retries):
             try:
                 resp = self.session.request(
                     method,
@@ -80,12 +80,14 @@ class HiBobClient:
                 )
 
                 if resp.status_code == 429:
+                    if attempt >= self.max_retries - 1:
+                        return resp
                     wait = self.retry_delay * (attempt + 1)
                     logger.warning(f"HiBob rate-limited, waiting {wait}s …")
                     time.sleep(wait)
                     continue
 
-                if resp.status_code >= 500 and attempt < self.max_retries:
+                if resp.status_code >= 500 and attempt < self.max_retries - 1:
                     wait = self.retry_delay * (attempt + 1)
                     logger.warning(
                         f"HiBob server error {resp.status_code}, retrying in {wait}s …"
@@ -96,12 +98,12 @@ class HiBobClient:
                 return resp
 
             except requests.RequestException as exc:
-                if attempt < self.max_retries:
+                if attempt < self.max_retries - 1:
                     wait = self.retry_delay * (attempt + 1)
                     logger.warning(f"HiBob request error: {exc}, retrying in {wait}s …")
                     time.sleep(wait)
                     continue
-                logger.error(f"HiBob request failed after {self.max_retries} retries: {exc}")
+                logger.error(f"HiBob request failed after {self.max_retries} attempts: {exc}")
                 return None
 
         return None

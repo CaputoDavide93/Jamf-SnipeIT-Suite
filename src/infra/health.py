@@ -23,6 +23,13 @@ def _is_authorized(auth_token: Optional[str], header_value: str) -> bool:
     return header_value == f"Bearer {auth_token}"
 
 
+def _is_request_authorized(path: str, auth_token: Optional[str], header_value: str) -> bool:
+    """Allow the liveness probe while protecting operational endpoints."""
+    if path == "/healthz":
+        return True
+    return _is_authorized(auth_token, header_value)
+
+
 @dataclass
 class HealthStatus:
     """Health status data."""
@@ -121,6 +128,8 @@ class HealthCheckServer:
         all_healthy = (
             self.status.jamf_healthy
             and self.status.snipe_healthy
+            and self.status.azure_healthy
+            and self.status.scheduler_running
             and all(self.status.custom_checks.values())
         )
 
@@ -198,7 +207,7 @@ class HealthCheckServer:
 
             def _authorized(self) -> bool:
                 header = self.headers.get("Authorization", "")
-                return _is_authorized(auth_token, header)
+                return _is_request_authorized(self.path, auth_token, header)
             
             def _send_response(self, status_code: int, content_type: str, body: str):
                 self.send_response(status_code)
@@ -211,15 +220,26 @@ class HealthCheckServer:
                 if not self._authorized():
                     self._send_response(401, 'application/json', json.dumps({'status': 'unauthorized'}))
                     return
-                if self.path == '/health' or self.path == '/healthz':
-                    # Liveness probe - is the service running?
+                if self.path == '/healthz':
+                    # Pure liveness: the process is answering, so it is alive.
+                    # This must NOT reflect run outcomes — it is the container
+                    # health check, and record_run() now reports failure for
+                    # modules that merely returned errors. Folding that in would
+                    # let ECS kill a healthy task part-way through a long chain
+                    # because an early module found problems.
+                    self._send_response(
+                        200, 'application/json', json.dumps({'status': 'ok'})
+                    )
+
+                elif self.path == '/health':
+                    # Aggregate health - reflects component and run state
                     status = health_server._get_status_dict()
                     is_alive = status['status'] != 'unhealthy'
-                    
+
                     response = {'status': 'ok' if is_alive else 'error'}
                     status_code = 200 if is_alive else 503
-                    
-                    self._send_response(status_code, 'application/json', 
+
+                    self._send_response(status_code, 'application/json',
                                        json.dumps(response))
                 
                 elif self.path == '/ready' or self.path == '/readyz':
