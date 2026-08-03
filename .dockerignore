@@ -33,10 +33,16 @@ env/
 *.swo
 *~
 
-# Configuration with secrets
-config/config.yaml
-config/config.yaml.*
-config/*.sb-*
+# Configuration: deny the whole directory, then re-allow only the non-secret
+# runtime mappings the image actually needs. Dockerfile does `COPY config/`,
+# so this must fail CLOSED — a stray credential file (config.yaml.bak,
+# creds.json, an editor's config.yaml.sb-* copy) must never reach the image
+# just because nobody remembered to add a new deny pattern.
+config/**
+!config/equipment_mapping.json
+!config/user_overrides.json
+!config/model_map.json
+
 *.secrets
 *.env
 .env*

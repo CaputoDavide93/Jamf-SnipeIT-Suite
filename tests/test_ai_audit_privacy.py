@@ -60,3 +60,21 @@ def test_ai_audit_tokenizes_external_identifiers_by_default():
         assert secret not in prompt
     assert "user-0001" in prompt
     assert "device-0001" in prompt
+
+
+def test_missing_llm_is_a_skip_not_a_run_failure():
+    """
+    An absent AI_API_KEY is a deployment state, not an error: returning an
+    "error" key made the whole housekeeping run-group exit non-zero.
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from infra.helpers import result_error_count
+
+    module = AIAuditModule.__new__(AIAuditModule)
+    module._llm = None
+
+    results = module.run()
+    assert results == {"skipped": True, "reason": "llm_not_configured"}
+    assert result_error_count(results) == 0

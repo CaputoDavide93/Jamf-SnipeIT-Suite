@@ -41,8 +41,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY src/ ./src/
 
-# Copy available non-secret runtime mappings. The config directory always
-# exists; optional user overrides/model maps are included when supplied.
+# Copy non-secret runtime mappings. .dockerignore denies config/** and
+# re-allows only equipment_mapping.json, user_overrides.json and
+# model_map.json, so this cannot pick up a stray credential file.
 COPY config/ ./config/
 
 # Copy entrypoint script

@@ -57,7 +57,15 @@ class AIAuditModule:
     def run(self, dry_run: bool = False) -> Dict[str, Any]:
         """Run the full cross-platform AI audit."""
         if not self._llm:
-            return {"error": "LLM not configured"}
+            # A missing key is a deliberate deployment state (no AI_API_KEY),
+            # not a run failure. Returning {"error": ...} made the whole
+            # housekeeping run-group exit non-zero, so an optional module
+            # turned the scheduled task red. Report a skip instead — the
+            # warning logged at construction keeps it visible.
+            logger.warning(
+                "AI Audit skipped: no LLM configured (set AI_API_KEY to enable)"
+            )
+            return {"skipped": True, "reason": "llm_not_configured"}
 
         logger.info("=== AI Cross-Platform Audit ===")
         results = {
