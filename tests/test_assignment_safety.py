@@ -378,6 +378,10 @@ def test_cleanup_does_not_delete_user_after_failed_asset_transfer(tmp_path):
     module.config = SimpleNamespace(
         logging=SimpleNamespace(dir=str(tmp_path), audit_csv=False)
     )
+    # Safety latch defaults dry_run=True; this test explicitly exercises the
+    # live-mode deletion-safety path, so override it like a real caller who
+    # has already flipped modules.cleanup.dry_run: false in config.
+    module.settings = {"dry_run": False}
 
     class FakeSnipe:
         delete_called = False
