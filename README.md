@@ -344,7 +344,7 @@ Dependencies are pinned for reproducible builds: `requirements.txt` is the human
 
 ## 📚 Documentation
 
-- 📖 **Full architecture & operations** → [Confluence: Jamf-SnipeIT Suite](https://xsolutions.atlassian.net/wiki/pages/viewpage.action?pageId=4493508620)
+- 📖 **Full architecture & operations** → [Confluence: Snipe-IT — Platform, Operations & Migration](https://xsolutions.atlassian.net/wiki/pages/viewpage.action?pageId=4609245190)
 - 🔧 **Runbook** (deploys, schedules, secret rotation, mutex) → [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 - 🤝 **Contributing** → [`CONTRIBUTING.md`](CONTRIBUTING.md)
 

@@ -105,6 +105,8 @@ When matching consistently picks the wrong Snipe-IT user for a given Jamf local 
 
 ### Onboarding a new SSO (SAML) user in Snipe-IT
 
+> Consolidated version with troubleshooting table: [Confluence — Snipe-IT: Platform, Operations & Migration, Part 1](https://xsolutions.atlassian.net/wiki/pages/viewpage.action?pageId=4609245190)
+
 **Background (2026-08-05):** the Snipe-IT EC2 migration surfaced a real gap — Snipe-IT's SAML login hardcodes matching the IdP's `emailaddress` claim (a full email address) against the local `username` column. Nearly every Snipe-IT user has a short-form `username` (`firstname.lastname`, no `@domain`) because that's what the Jamf-device-matching logic in this suite (`UserMatcher`) is built around. The two are incompatible for any user who actually needs to log into Snipe-IT via SSO.
 
 `username_standardize.py` runs on a schedule and actively converts any `username` containing `@` back to short form — so a manual fix to `username` alone will get silently reverted.
