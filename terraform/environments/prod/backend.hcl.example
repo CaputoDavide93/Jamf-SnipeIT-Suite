@@ -1,0 +1,9 @@
+# Copy to backend.hcl (untracked) and fill in, then:
+#   terraform init -backend-config=backend.hcl
+#
+# The state bucket name embeds the AWS account ID, which is why it is not
+# committed. Get it from the AWS console, or:
+#   aws s3 ls | grep jamf-snipeit-terraform-state
+
+bucket         = "jamf-snipeit-terraform-state-<AWS_ACCOUNT_ID>"
+dynamodb_table = "jamf-snipeit-terraform-locks"

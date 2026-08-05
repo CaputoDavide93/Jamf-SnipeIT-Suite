@@ -2,6 +2,19 @@
 
 Day-to-day tasks for running the Jamf-SnipeIT Suite in production.
 
+## Placeholders in this guide
+
+This repo is mirrored publicly, so infrastructure identifiers are written as
+placeholders. Substitute them before running any command below:
+
+| Placeholder | How to get the real value |
+|-------------|---------------------------|
+| `<AWS_ACCOUNT_ID>` | `aws sts get-caller-identity --query Account --output text` |
+| `<SUBNET_ID>` / `<SECURITY_GROUP_ID>` | `terraform output` in `terraform/environments/prod`, or the ECS service's network config in the console |
+
+`./scripts/deploy.sh` resolves the account ID itself — prefer it over the manual
+Docker commands where you can.
+
 ## Daily checks
 
 The system runs automatically at 06:00 UTC. You should only need to check:

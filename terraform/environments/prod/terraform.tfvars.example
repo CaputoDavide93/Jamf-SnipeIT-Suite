@@ -5,6 +5,9 @@
 # NEVER commit terraform.tfvars to version control!
 # =============================================================================
 
+# 12-digit AWS account this stack may deploy into (wrong-account guard).
+aws_account_id = "000000000000"
+
 aws_region  = "eu-west-1"
 aws_profile = "prod"
 

@@ -21,12 +21,14 @@ terraform {
     }
   }
 
+  # Partial backend config — the bucket name embeds the AWS account ID, so it
+  # lives in an untracked backend.hcl. Initialise with:
+  #   terraform init -backend-config=backend.hcl
+  # See backend.hcl.example.
   backend "s3" {
-    bucket         = "jamf-snipeit-terraform-state-<AWS_ACCOUNT_ID>"
-    key            = "jamf-snipeit-suite/terraform.tfstate"
-    region         = "eu-west-1"
-    dynamodb_table = "jamf-snipeit-terraform-locks"
-    encrypt        = true
+    key     = "jamf-snipeit-suite/terraform.tfstate"
+    region  = "eu-west-1"
+    encrypt = true
   }
 }
 
@@ -35,7 +37,7 @@ provider "aws" {
 
   # SAFETY: Only deploy to THIS account and region — prevents accidental
   # deployment to wrong account if credentials/profile are misconfigured
-  allowed_account_ids = ["<AWS_ACCOUNT_ID>"]
+  allowed_account_ids = [var.aws_account_id]
 
   default_tags {
     tags = {
@@ -115,6 +117,17 @@ module "jamf_snipeit_suite" {
 # =============================================================================
 # Variables
 # =============================================================================
+# Set in the untracked terraform.tfvars. No default — an unset value must fail
+# loudly rather than silently disable the wrong-account guard below.
+variable "aws_account_id" {
+  type        = string
+  description = "AWS account this stack is allowed to deploy into."
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
+    error_message = "aws_account_id must be a 12-digit AWS account ID."
+  }
+}
+
 variable "aws_region" {
   type    = string
   default = "eu-west-1"

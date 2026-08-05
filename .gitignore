@@ -95,4 +95,6 @@ temp/
 terraform/environments/prod/.terraform/
 *.tfstate*
 *.tfvars
+backend.hcl
+!backend.hcl.example
 .claude/

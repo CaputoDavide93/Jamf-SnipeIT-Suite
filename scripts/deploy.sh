@@ -6,7 +6,10 @@ set -euo pipefail
 ENV="${1:-prod}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TF_DIR="$ROOT/terraform/environments/$ENV"
-ECR="<AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-prod"
+AWS_REGION="${AWS_REGION:-eu-west-1}"
+# Resolved at runtime so no account ID is hardcoded in the repo.
+ACCOUNT_ID="${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}"
+ECR="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/jamf-snipeit-suite-prod"
 
 if [ ! -d "$TF_DIR" ]; then
   echo "ERROR: $TF_DIR does not exist"; exit 1
@@ -48,7 +51,7 @@ echo "=== [5/6] Docker build ==="
 docker build --platform linux/amd64 -t "$ECR:latest" .
 
 echo "=== [6/6] Docker push ==="
-aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin "${ECR%/*}"
+aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR%/*}"
 docker push "$ECR:latest"
 
 echo
