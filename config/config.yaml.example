@@ -139,6 +139,16 @@ modules:
     enabled: true
     default_group_id: ""
 
+  # Cleanup module settings — detects and merges duplicate Snipe-IT users
+  # (reassigns assets, then DELETES the loser account)
+  cleanup:
+    enabled: true
+    # SAFETY LATCH: config dry_run can only force dry-run ON, never off.
+    # This module deletes user accounts — leave true until the merge
+    # heuristic has a track record, then flip to false after reviewing
+    # DRY RUN log output.
+    dry_run: true
+
 # -----------------------------------------------------------------------------
 # Scheduler Configuration
 # -----------------------------------------------------------------------------

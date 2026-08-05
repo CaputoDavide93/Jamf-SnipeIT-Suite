@@ -26,6 +26,7 @@ class CleanupModule:
 
     def __init__(self, config: Config):
         self.config = config
+        self.settings = config.modules.get("cleanup", {})
         self.snipe = SnipeITClient(
             base_url=config.snipeit.base_url,
             api_token=config.snipeit.api_token,
@@ -110,6 +111,18 @@ class CleanupModule:
         Args:
             dry_run: If True, only report — don't change anything.
         """
+        # Config-level dry_run acts as a safety latch: a caller can only
+        # force dry-run ON, never off. This module deletes user accounts
+        # (merging duplicates) — stay read-only until modules.cleanup.dry_run
+        # is explicitly flipped to false after reviewing DRY RUN output.
+        if self.settings.get("dry_run", True):
+            if not dry_run:
+                logger.info(
+                    "cleanup.dry_run is true in config — forcing DRY RUN "
+                    "(set modules.cleanup.dry_run: false to go live)"
+                )
+            dry_run = True
+
         logger.info(f"Starting Cleanup module: dry_run={dry_run}")
 
         results: Dict[str, Any] = {

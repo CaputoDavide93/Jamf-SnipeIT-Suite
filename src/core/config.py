@@ -340,7 +340,10 @@ class Config:
                 "user_match": _module_controls("user_match"),
                 "snipe_to_jamf": _module_controls("snipe_to_jamf"),
                 "leavers": _module_controls("leavers"),
-                "cleanup": _module_controls("cleanup"),
+                # Safety latch: dry_run defaults true, since this module deletes
+                # user accounts (merging duplicates) — no changes until
+                # MODULE_CLEANUP_DRY_RUN is explicitly "false".
+                "cleanup": _module_controls("cleanup", dry_run_default=True),
                 "username_standardize": _module_controls("username_standardize"),
                 "reconciliation": _module_controls("reconciliation"),
                 "health_check": {
