@@ -255,7 +255,10 @@ class UserMatchModule:
                 "last_name": last,
                 "name": display_name,
                 "email": email,
-                "username": email,
+                # Email-prefix, matching azure_starters.py's convention —
+                # keeps every newly-created user consistent regardless of
+                # which module happened to create them first.
+                "username": email.split("@")[0].lower(),
                 "_dry_run_created": True,
                 "_created": True,
             }
@@ -271,7 +274,9 @@ class UserMatchModule:
             "first_name": first,
             "last_name": last,
             "email": email,
-            "username": email,
+            # Email-prefix, matching azure_starters.py's convention — see
+            # the dry-run branch above for why.
+            "username": email.split("@")[0].lower(),
             "password": pw,
             "password_confirmation": pw,
             "jobtitle": azure_user.get("jobTitle") or "",
