@@ -16,10 +16,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Python dependencies
-COPY requirements.txt .
+# Install Python dependencies — pinned lockfile for reproducible builds.
+# requirements.txt stays as the human-edited abstract dep list; regenerate
+# requirements.lock.txt (pip freeze) after changing it and review the diff.
+COPY requirements.lock.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.lock.txt
 
 
 # Stage 2: Runtime
