@@ -90,6 +90,29 @@ When matching consistently picks the wrong Snipe-IT user for a given Jamf local 
 
 **Normalisation rules:** keys are matched case-insensitive and dot/dash/underscore-insensitive. `matt-personal` and `matt.personal` and `MATTPERSONAL` all match the same override key.
 
+### Onboarding a new SSO (SAML) user in Snipe-IT
+
+**Background (2026-08-05):** the Snipe-IT EC2 migration surfaced a real gap — Snipe-IT's SAML login hardcodes matching the IdP's `emailaddress` claim (a full email address) against the local `username` column. Nearly every Snipe-IT user has a short-form `username` (`firstname.lastname`, no `@domain`) because that's what the Jamf-device-matching logic in this suite (`UserMatcher`) is built around. The two are incompatible for any user who actually needs to log into Snipe-IT via SSO.
+
+`username_standardize.py` runs on a schedule and actively converts any `username` containing `@` back to short form — so a manual fix to `username` alone will get silently reverted.
+
+When someone new needs SAML login access to Snipe-IT:
+
+1. Let them get provisioned normally first (via Azure Starters or however their account already exists) — don't change anything yet.
+2. In Snipe-IT (Admin → Users → edit user), set their `Username` field to their **full email address**, matching exactly what Azure sends.
+3. Add that email (lowercase) to `preserved_usernames` in `config/user_overrides.json`:
+   ```json
+   "preserved_usernames": [
+     "davide.caputo@xdesign.com",
+     "daniel.mcmanus@createfuture.com",
+     "new.person@createfuture.com"
+   ]
+   ```
+   This is the only thing that stops `username_standardize.py` reverting the change on its next scheduled run.
+4. In Snipe-IT, make sure their account is **Activated** — this is the actual login gate (`samlLogin()` requires `activated = 1`; it won't find a deactivated user at all).
+
+**Do not** change `azure_starters.py`/`user_match.py` to make *every* new user's username the full email address — that would break Jamf-device matching for everyone else, since `UserMatcher` is built around short-form usernames matching macOS local account names. The `preserved_usernames` override is the correct, narrow fix for the small number of people who actually need SSO.
+
 ### Adding a new equipment mapping (HiBob to Snipe-IT)
 
 Edit `config/equipment_mapping.json`:

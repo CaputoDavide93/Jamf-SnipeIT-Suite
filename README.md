@@ -299,6 +299,7 @@ docker push <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-
 | 🧯 Fetch-integrity aborts | An empty API response triggering mass duplicate creation |
 | ⏸️ *Pending*, never delete | Any destructive action on leaver data |
 | 📴 HiBob strictly read-only | Any write ever reaching the HR source of truth |
+| 🔒 Dry-run safety latch on Cleanup (added 2026-08-05) | Merging/deleting a user account on an email-collision false positive |
 
 ## 📁 Repo Structure
 
@@ -330,10 +331,16 @@ Jamf-SnipeIT-Suite/
 
 ```bash
 pytest tests/ -v        # matcher scoring, lifecycle classification,
-                        # rehire signals, starters guards, mutex & health helpers
+                        # rehire signals, starters guards, mutex & health helpers,
+                        # azure-starters user creation (passwords, username convention)
 ```
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the suite on every push/PR and fails if the generated module inventory is stale (`python tools/gen_modules_doc.py --check`).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the suite on every push/PR against the pinned lockfile (`requirements.lock.txt`) and fails if the generated module inventory is stale (`python tools/gen_modules_doc.py --check`).
+
+Dependencies are pinned for reproducible builds: `requirements.txt` is the human-edited abstract list, `requirements.lock.txt` (generated via `pip freeze`) is what the Docker build and CI actually install from. Regenerate it after changing `requirements.txt`:
+```bash
+.venv/bin/pip freeze > requirements.lock.txt   # review the diff before committing
+```
 
 ## 📚 Documentation
 
