@@ -94,9 +94,16 @@ resource "aws_iam_role_policy" "eventbridge_run_task" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = "ecs:RunTask"
-        Resource = aws_ecs_task_definition.app.arn
+        Effect = "Allow"
+        Action = "ecs:RunTask"
+        # Wildcard revision, not aws_ecs_task_definition.app.arn (revision-pinned).
+        # On 2026-08-03/06 the task-def was bumped to rev 6 via direct AWS CLI
+        # calls (not `terraform apply`), so the revision-pinned policy went
+        # stale at rev 4 and every scheduled EventBridge trigger failed with
+        # AccessDenied for 8 days with zero tasks launched. A wildcard makes
+        # the policy immune to task-def revision drift regardless of how the
+        # revision was bumped.
+        Resource = "${replace(aws_ecs_task_definition.app.arn, "/:\\d+$/", "")}:*"
         Condition = {
           ArnLike = {
             "ecs:cluster" = aws_ecs_cluster.main.arn
