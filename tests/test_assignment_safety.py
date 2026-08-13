@@ -660,3 +660,29 @@ def test_user_match_requests_extension_attributes_subset():
 
     source = inspect.getsource(UserMatchModule._process_device)
     assert "ExtensionAttributes" in source
+
+
+def test_choose_model_id_prefers_live_snipe_model_name_match():
+    """
+    On 2026-08-11, config/model_map.json was never shipped, so _choose_model_id
+    always fell through to model_fallback_id (id 40, "MacBook Pro 14-inch M4
+    Pro") for every asset it auto-created, regardless of the device's real
+    model. model_sync then silently corrected it hours later on the next run.
+    Assert the live, name-keyed Snipe-IT lookup (matching model_sync's own
+    approach) is tried first and wins over both the static map and fallback.
+    """
+    module = UserMatchModule.__new__(UserMatchModule)
+    module.model_map = {}
+    module.config = SimpleNamespace(snipeit=SimpleNamespace(model_fallback_id=40))
+    module._live_model_map = {"macbook pro (13-inch, m1, 2020)": 38}
+
+    assert module._choose_model_id("MacBook Pro (13-inch, M1, 2020)", "Mac16,7") == 38
+
+
+def test_choose_model_id_falls_back_when_no_match_anywhere():
+    module = UserMatchModule.__new__(UserMatchModule)
+    module.model_map = {}
+    module.config = SimpleNamespace(snipeit=SimpleNamespace(model_fallback_id=40))
+    module._live_model_map = {}
+
+    assert module._choose_model_id("Some Unknown Model", "MacXX,Y") == 40

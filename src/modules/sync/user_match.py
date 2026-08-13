@@ -65,6 +65,7 @@ class UserMatchModule:
         self._dry_run_created_users_by_email: Dict[str, Dict[str, Any]] = {}
         # serial (upper) -> Snipe-IT asset, built once per run
         self._serial_map: Optional[Dict[str, Dict[str, Any]]] = None
+        self._live_model_map: Optional[Dict[str, int]] = None
 
     def _get_serial_map(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -174,10 +175,36 @@ class UserMatchModule:
             logger.debug(f"Loaded {len(users)} Snipe-IT + {len(azure_users)} Azure AD users for matching")
         return self._user_matcher
     
-    def _choose_model_id(self, model_identifier: str) -> int:
-        """Choose Snipe model ID from model identifier."""
+    def _get_live_model_map(self) -> Dict[str, int]:
+        """
+        Live Snipe-IT model name -> ID map, built once per run.
+
+        config/model_map.json (keyed by Jamf model_identifier, e.g.
+        "Mac16,7") is never shipped in this deployment, so _choose_model_id
+        previously always fell through to model_fallback_id (default 40,
+        "MacBook Pro 14-inch M4 Pro") for every asset it auto-created,
+        regardless of the device's real model. model_sync then silently
+        corrected it hours later on the next run. Mirror model_sync's
+        approach instead: look up by the friendly hardware "model" name
+        against Snipe-IT's own model list, which is always current.
+        """
+        if self._live_model_map is None:
+            self._live_model_map = self.snipe.get_model_name_to_id_map()
+        return self._live_model_map
+
+    def _choose_model_id(self, model_name: str, model_identifier: str = "") -> int:
+        """Choose Snipe model ID from the Jamf hardware model name."""
+        if model_name:
+            model_id = self._get_live_model_map().get(model_name.lower())
+            if model_id:
+                return model_id
+        # Static identifier-keyed map, kept for any deployment that ships one.
         if model_identifier and model_identifier in self.model_map:
             return int(self.model_map[model_identifier])
+        logger.warning(
+            f"No Snipe-IT model match for {model_name!r} (identifier={model_identifier!r}); "
+            f"falling back to model_fallback_id={self.config.snipeit.model_fallback_id}"
+        )
         return self.config.snipeit.model_fallback_id
 
     def _try_create_from_azure(
@@ -676,8 +703,9 @@ class UserMatchModule:
                     results["errors"] += 1
         else:
             # Create new asset
+            model_name = hardware.get("model", "")
             model_identifier = hardware.get("model_identifier", "")
-            model_id = self._choose_model_id(model_identifier)
+            model_id = self._choose_model_id(model_name, model_identifier)
             
             action = "create"
             
