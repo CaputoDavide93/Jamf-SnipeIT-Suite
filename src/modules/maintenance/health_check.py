@@ -23,6 +23,7 @@ from core.client_factory import (
     create_slack_client,
 )
 from clients.azure import AzureClient
+from infra.helpers import leave_date_passed
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +343,16 @@ class HealthCheckModule:
 
     # ------------------------------------------------------------------
     def _load_azure_inactive(self) -> Set[str]:
+        """
+        Emails of users who have actually left, not everyone in the leavers
+        group. On 2026-08-03 this counted raw group membership, so staff
+        still accountEnabled and serving notice (in the leavers group but not
+        yet gone) showed up as "Checked Out to disabled/leaver user" findings
+        — 10 of 12 on that scan. Leavers itself only tags a user [Disabled]
+        once _should_tag_disabled is true (accountEnabled is False, or the
+        leave date has passed); mirror that same test here so both modules
+        agree on who has actually left.
+        """
         emails: Set[str] = set()
         for gid in (
             self.config.azure.leavers_group_id,
@@ -351,6 +362,8 @@ class HealthCheckModule:
                 continue
             try:
                 for u in self.azure.get_group_members(gid):
+                    if u.get("accountEnabled", True) and not leave_date_passed(u):
+                        continue
                     e = AzureClient.extract_email(u)
                     if e:
                         emails.add(e.lower())

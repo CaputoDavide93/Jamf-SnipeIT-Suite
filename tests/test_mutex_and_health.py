@@ -190,3 +190,54 @@ def test_health_jamf_index_reports_partial_fetch_failures():
     assert local_norms == {"firstlast"}
     assert errors == [{"computer_id": 2, "error": "timeout"}]
     assert total == 2
+
+
+def test_azure_inactive_excludes_staff_serving_notice():
+    """
+    On 2026-08-03 this counted raw leavers/disabled group membership, so
+    staff still accountEnabled and serving notice (in the leavers group but
+    not yet gone) were reported as "Checked Out to disabled/leaver user"
+    findings — 10 of 12 that day were false positives. Must agree with
+    Leavers' own _should_tag_disabled test: accountEnabled False, or the
+    leave date has passed.
+    """
+    module = HealthCheckModule.__new__(HealthCheckModule)
+    module.config = type("Config", (), {
+        "azure": type("Azure", (), {
+            "leavers_group_id": "leavers-group",
+            "disabled_group_id": "disabled-group",
+        })(),
+    })()
+
+    members_by_group = {
+        "leavers-group": [
+            {  # serving notice: still enabled, no leave date yet
+                "mail": "notice.period@createfuture.com",
+                "accountEnabled": True,
+                "employeeLeaveDateTime": None,
+            },
+            {  # actually left: leave date passed
+                "mail": "already.left@createfuture.com",
+                "accountEnabled": True,
+                "employeeLeaveDateTime": "2020-01-01T00:00:00Z",
+            },
+        ],
+        "disabled-group": [
+            {  # hard disabled
+                "mail": "hard.disabled@createfuture.com",
+                "accountEnabled": False,
+                "employeeLeaveDateTime": None,
+            },
+        ],
+    }
+
+    class FakeAzure:
+        def get_group_members(self, gid):
+            return members_by_group[gid]
+
+    module.azure = FakeAzure()
+
+    inactive = module._load_azure_inactive()
+
+    assert inactive == {"already.left@createfuture.com", "hard.disabled@createfuture.com"}
+    assert "notice.period@createfuture.com" not in inactive
