@@ -1,0 +1,79 @@
+# Dependencies
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Configuration: deny the whole directory, then re-allow only the non-secret
+# runtime mappings the image actually needs. Dockerfile does `COPY config/`,
+# so this must fail CLOSED — a stray credential file (config.yaml.bak,
+# creds.json, an editor's config.yaml.sb-* copy) must never reach the image
+# just because nobody remembered to add a new deny pattern.
+config/**
+!config/equipment_mapping.json
+!config/user_overrides.json
+!config/model_map.json
+
+*.secrets
+*.env
+.env*
+
+# Logs and output
+logs/
+output/
+*.log
+*.csv
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+
+# Claude
+.claude/
+
+# Docker
+.docker/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

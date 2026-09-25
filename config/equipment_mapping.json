@@ -1,0 +1,31 @@
+{
+  "_description": "Equipment name mapping: HiBob/Supplier name → Snipe-IT accessory name",
+  "_instructions": "Add entries to map different names to a single Snipe-IT accessory. If a name is not mapped, the original HiBob name will be used.",
+  
+  "mappings": {
+    "Headphones": "Headphones (Jabra)",
+    "Bose Headphones": "Headphones (Bose)",
+    "Jabra Headphones": "Headphones (Jabra)",
+    "Jabra": "Headphones (Jabra)",
+    "Poly Headphones": "Headphones (Poly)",
+    "Airpod Headphones": "AirPods (Apple)",
+    "AirPods": "AirPods (Apple)",
+    "AirPods Pro": "AirPods (Apple)",
+    
+    "Monitor (1080p)": "Monitor (1080p)",
+    "Monitor 1080p": "Monitor (1080p)",
+    "Dell Monitor 24": "Monitor (1080p)",
+    
+    "Mouse and Keyboard (Apple)": "Mouse and Keyboard (Apple)",
+    "Apple Magic Keyboard": "Mouse and Keyboard (Apple)",
+    "Apple Magic Mouse": "Mouse and Keyboard (Apple)",
+    
+    "Laptop Riser": "Laptop Riser",
+    "Laptop Stand": "Laptop Riser",
+    
+    "Apple Trackpad": "Trackpad (Apple)",
+    "Magic Trackpad": "Trackpad (Apple)",
+    
+    "USBC Cable": "USB-C Cable"
+  }
+}

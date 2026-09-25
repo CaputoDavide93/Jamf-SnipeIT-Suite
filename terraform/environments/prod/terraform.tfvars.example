@@ -1,0 +1,67 @@
+# =============================================================================
+# Jamf-SnipeIT Suite — Production Variables
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in your values.
+# NEVER commit terraform.tfvars to version control!
+# =============================================================================
+
+# 12-digit AWS account this stack may deploy into (wrong-account guard).
+aws_account_id = "000000000000"
+
+aws_region  = "eu-west-1"
+aws_profile = "prod"
+
+# -- Networking (optional — empty = default VPC) --
+# Put the tasks in the same VPC as Snipe-IT to reach it over a private IP.
+vpc_id     = "" # e.g. "vpc-0123456789abcdef0"
+subnet_ids = [] # e.g. ["subnet-0123456789abcdef0", "subnet-0fedcba9876543210"]
+
+# -- Jamf Pro --
+jamf_base_url = "https://your-instance.jamfcloud.com"
+jamf_username = ""
+jamf_password = ""
+
+# -- Snipe-IT --
+snipeit_base_url  = "https://snipeit.your-domain.com"
+snipeit_api_token = ""
+
+# -- Azure AD / Microsoft Entra --
+azure_tenant_id     = ""
+azure_client_id     = ""
+azure_client_secret = ""
+
+# -- Slack --
+slack_bot_token  = "xoxb-..."
+slack_channel_id = ""
+
+# -- HiBob (optional) --
+hibob_service_user_id    = ""
+hibob_service_user_token = ""
+
+# -- AI Resolver (optional) --
+ai_api_key = ""
+
+# -- Per-module safety controls (optional) --
+# Rehire restoration is read-only until explicitly set to false. Production
+# has been live since task-def rev 6, so the prod default is already false —
+# a NEW environment should start at true and flip it only after reviewing a
+# dry-run's output.
+rehire_detection_dry_run = false
+mark_contractors         = true
+
+# module_enabled_overrides = {
+#   ai_audit = false
+# }
+# module_dry_run_overrides = {
+#   cleanup    = true
+#   user_match = true
+# }
+# ai_audit_allow_external_pii = false
+# health_check_max_workers = 8
+# health_check_scan_error_ratio_threshold = 0.1
+
+# -- Monitoring (optional — leave empty for no alarms) --
+alarm_email = ""
+
+# Shared SNS topic that receives failed scheduled-task alerts (empty = disabled)
+alerts_topic_arn = "" # e.g. "arn:aws:sns:eu-west-1:123456789012:techops-alerts"
