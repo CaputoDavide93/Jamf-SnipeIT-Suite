@@ -51,7 +51,7 @@ This project adheres to a Code of Conduct. By participating, you are expected to
 
 4. **Set up configuration**
    ```bash
-   cp config/config.yaml.example config/config.yaml
+   cp config/config.example.yaml config/config.yaml
    # Edit with your test credentials
    ```
 
@@ -195,17 +195,23 @@ See [SECURITY.md](SECURITY.md) for full security guidelines.
 
 ## 📁 Project Structure
 
-```
+```text
 Jamf-SnipeIT-Suite/
 ├── src/
-│   ├── core/           # API clients and config
-│   ├── modules/        # Feature modules
-│   ├── utils/          # Shared utilities
+│   ├── clients/        # API clients (jamf, snipeit, azure, hibob, slack)
+│   ├── core/           # Config schema, client factory, run context, state
+│   ├── matching/       # User matching + AI resolver
+│   ├── infra/          # Mutex, health server, audit CSV, helpers
+│   ├── modules/        # Feature modules (lifecycle, sync, maintenance)
+│   ├── scripts/        # One-off imports (run from src/ as python -m scripts.<name>)
 │   └── main.py         # CLI entry point
 ├── config/
-│   └── config.yaml.example
-├── tests/              # Unit tests
-├── docs/               # Additional documentation
+│   └── config.example.yaml
+├── scripts/            # deploy.sh, verify-image.sh, docker-entrypoint.sh
+├── terraform/          # AWS infrastructure
+├── tests/              # pytest suite
+├── tools/              # Doc and diagram generators
+├── docs/               # Runbook + diagram assets
 └── README.md
 ```
 

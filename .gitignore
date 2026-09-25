@@ -54,7 +54,7 @@ env/
 .pydevproject
 .settings/
 
-# Configuration with secrets (KEEP config.yaml.example)
+# Configuration with secrets (KEEP config.example.yaml)
 config/config.yaml
 config/config.yaml.*
 config/*.sb-*

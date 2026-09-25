@@ -198,14 +198,14 @@ All jobs run in `Europe/London`, serialised under the run mutex. Local scheduler
 git clone <repo-url> && cd Jamf-SnipeIT-Suite
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp config/config.yaml.example config/config.yaml   # fill in credentials
+cp config/config.example.yaml config/config.yaml   # fill in credentials
 python src/main.py                                  # interactive menu
 ```
 
 ### Docker
 
 ```bash
-cp config/config.yaml.example config/config.yaml
+cp config/config.example.yaml config/config.yaml
 docker compose up          # scheduler mode with health endpoint
 ```
 
@@ -282,7 +282,7 @@ docker push <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-
 
 **Failure alerts:** set `alerts_topic_arn` (shared SNS topic) and/or `alarm_email` in `terraform.tfvars`. An EventBridge rule on *ECS Task State Change* forwards any task that stops with a non-zero exit code or `TaskFailedToStart`; a per-schedule `FailedInvocations` alarm catches RunTask launch failures, where no task ever exists.
 
-> ⚠️ **Config changes ≠ code changes.** Fargate never reads `config.yaml` — non-secret settings live in the **task-definition environment**. To change one: register a new task-def revision, then repoint all five EventBridge rule targets to it. See [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+> ⚠️ **Config changes ≠ code changes.** Fargate never reads `config.yaml` — non-secret settings live in the **task-definition environment**. To change one: register a new task-def revision, then repoint all five EventBridge rule targets to it. See [`docs/operations.md`](docs/operations.md).
 
 ## 🛡 Safety Model
 
@@ -316,12 +316,12 @@ Jamf-SnipeIT-Suite/
 │   ├── scripts/            # 🧾 One-off imports (shipment history)
 │   ├── main.py             # 🎛️ CLI entry point (interactive menu + subcommands)
 │   └── docker_scheduler.py # ⏰ Container entry point (APScheduler + health endpoint)
-├── config/                 # 📝 config.yaml.example + equipment mapping
+├── config/                 # 📝 config.example.yaml + equipment mapping
 ├── terraform/              # ☁️ AWS infra (ECS, ECR, EventBridge, SSM, IAM, failure alerts)
 ├── tests/                  # 🧪 pytest suite
 ├── tools/                  # 🤖 gen_modules_doc.py (README inventory), gen_diagram.py (diagrams)
-├── docs/                   # 📚 OPERATIONS.md runbook, assets/ diagram SVGs
-└── scripts/                # 🚀 deploy.sh
+├── docs/                   # 📚 operations.md runbook, assets/ diagram SVGs
+└── scripts/                # 🚀 deploy.sh, verify-image.sh, docker-entrypoint.sh (container entrypoint)
 ```
 
 ---
@@ -352,8 +352,10 @@ python3 -m venv /tmp/lockenv && /tmp/lockenv/bin/pip install -r requirements.txt
 
 ## 📚 Documentation
 
-- 🔧 **Runbook** (deploys, schedules, secret rotation, mutex) → [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+- 🔧 **Runbook** (deploys, schedules, secret rotation, mutex) → [`docs/operations.md`](docs/operations.md)
 - 🤝 **Contributing** → [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- 🔒 **Security policy** (how to report a vulnerability) → [`SECURITY.md`](SECURITY.md)
+- 📄 **License** (MIT) → [`LICENSE`](LICENSE)
 
 ---
 

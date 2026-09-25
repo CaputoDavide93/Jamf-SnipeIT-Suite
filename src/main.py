@@ -890,7 +890,7 @@ Examples:
         print("✅ Configuration loaded successfully\n")
     except FileNotFoundError:
         print(f"❌ Configuration file not found: {args.config}")
-        print("   Please copy config.yaml.example to config.yaml and update values.")
+        print("   Please copy config.example.yaml to config.yaml and update values.")
         return 1
     except Exception as e:
         print(f"❌ Error loading configuration: {e}")

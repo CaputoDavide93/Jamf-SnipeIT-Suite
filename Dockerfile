@@ -56,7 +56,7 @@ COPY src/ ./src/
 COPY config/ ./config/
 
 # Copy entrypoint script
-COPY docker-entrypoint.sh /app/
+COPY scripts/docker-entrypoint.sh /app/
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Create directories for config and logs
