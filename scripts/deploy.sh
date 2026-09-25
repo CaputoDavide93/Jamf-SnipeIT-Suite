@@ -48,11 +48,13 @@ terraform apply /tmp/tfplan-$ENV
 # 6. Build + push image
 cd "$ROOT"
 echo "=== [5/6] Docker build ==="
-docker build --platform linux/amd64 -t "$ECR:latest" .
+docker build --pull --provenance=false --sbom=false --platform linux/amd64 -t "$ECR:latest" .
 
 echo "=== [6/6] Docker push ==="
 aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR%/*}"
 docker push "$ECR:latest"
+# :base = last source build; the weekly container-patch-rebuild job patches FROM it
+docker tag "$ECR:latest" "$ECR:base" && docker push "$ECR:base"
 
 echo
 echo "Deploy complete."

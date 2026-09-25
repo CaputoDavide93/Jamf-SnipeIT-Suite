@@ -24,26 +24,28 @@ resource "aws_ecr_lifecycle_policy" "app" {
     rules = [
       {
         rulePriority = 1
-        description  = "Expire untagged images after 7 days"
-        selection = {
-          tagStatus   = "untagged"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = 7
-        }
-        action = { type = "expire" }
+        description  = "Protect :base (weekly patch job builds FROM it)"
+        selection    = { tagStatus = "tagged", tagPrefixList = ["base"], countType = "imageCountMoreThan", countNumber = 1 }
+        action       = { type = "expire" }
       },
       {
         rulePriority = 2
-        description  = "Keep last 10 tagged images"
-        selection = {
-          tagStatus     = "tagged"
-          tagPrefixList = ["latest", "v"]
-          countType     = "imageCountMoreThan"
-          countNumber   = 10
-        }
-        action = { type = "expire" }
-      }
+        description  = "Protect :latest"
+        selection    = { tagStatus = "tagged", tagPrefixList = ["latest"], countType = "imageCountMoreThan", countNumber = 1 }
+        action       = { type = "expire" }
+      },
+      {
+        rulePriority = 3
+        description  = "Expire untagged images after 7 days"
+        selection    = { tagStatus = "untagged", countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }
+        action       = { type = "expire" }
+      },
+      {
+        rulePriority = 4
+        description  = "Keep last 10 images"
+        selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 10 }
+        action       = { type = "expire" }
+      },
     ]
   })
 }

@@ -244,6 +244,12 @@ variable "alarm_email" {
   default     = ""
 }
 
+variable "alerts_topic_arn" {
+  type        = string
+  description = "Shared SNS topic for scheduled-task failure alerts (empty = disabled)"
+  default     = ""
+}
+
 variable "log_retention_days" {
   type    = number
   default = 90

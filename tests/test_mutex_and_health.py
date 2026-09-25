@@ -212,19 +212,19 @@ def test_azure_inactive_excludes_staff_serving_notice():
     members_by_group = {
         "leavers-group": [
             {  # serving notice: still enabled, no leave date yet
-                "mail": "notice.period@createfuture.com",
+                "mail": "notice.period@example.com",
                 "accountEnabled": True,
                 "employeeLeaveDateTime": None,
             },
             {  # actually left: leave date passed
-                "mail": "already.left@createfuture.com",
+                "mail": "already.left@example.com",
                 "accountEnabled": True,
                 "employeeLeaveDateTime": "2020-01-01T00:00:00Z",
             },
         ],
         "disabled-group": [
             {  # hard disabled
-                "mail": "hard.disabled@createfuture.com",
+                "mail": "hard.disabled@example.com",
                 "accountEnabled": False,
                 "employeeLeaveDateTime": None,
             },
@@ -239,5 +239,5 @@ def test_azure_inactive_excludes_staff_serving_notice():
 
     inactive = module._load_azure_inactive()
 
-    assert inactive == {"already.left@createfuture.com", "hard.disabled@createfuture.com"}
-    assert "notice.period@createfuture.com" not in inactive
+    assert inactive == {"already.left@example.com", "hard.disabled@example.com"}
+    assert "notice.period@example.com" not in inactive

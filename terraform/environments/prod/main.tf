@@ -59,6 +59,13 @@ module "jamf_snipeit_suite" {
   aws_region   = var.aws_region
   project_name = var.project_name
 
+  # -- Networking --
+  # Run in the Snipe-IT VPC so the suite reaches Snipe-IT over its private IP
+  # (a public ALB restricted to office IPs can't allowlist random Fargate IPs).
+  # Empty values fall back to the default VPC.
+  vpc_id     = var.vpc_id
+  subnet_ids = var.subnet_ids
+
   # -- Jamf --
   jamf_base_url = var.jamf_base_url
   jamf_username = var.jamf_username
@@ -111,6 +118,7 @@ module "jamf_snipeit_suite" {
 
   # -- Monitoring --
   alarm_email        = var.alarm_email
+  alerts_topic_arn   = var.alerts_topic_arn
   log_retention_days = 90
 }
 
@@ -271,6 +279,24 @@ variable "alarm_email" {
   default = ""
 }
 
+variable "vpc_id" {
+  type        = string
+  description = "VPC for the Fargate tasks (empty = default VPC)"
+  default     = ""
+}
+
+variable "subnet_ids" {
+  type        = list(string)
+  description = "Subnets for the Fargate tasks (empty = default VPC subnets)"
+  default     = []
+}
+
+variable "alerts_topic_arn" {
+  type        = string
+  description = "Shared SNS topic for scheduled-task failure alerts"
+  default     = ""
+}
+
 # =============================================================================
 # Outputs
 # =============================================================================
@@ -281,6 +307,10 @@ output "ecr_repository_url" {
 
 output "ecs_cluster_name" {
   value = module.jamf_snipeit_suite.ecs_cluster_name
+}
+
+output "security_group_id" {
+  value = module.jamf_snipeit_suite.security_group_id
 }
 
 output "log_group" {

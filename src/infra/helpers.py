@@ -1,15 +1,12 @@
 """
 Jamf-SnipeIT Suite - Utility helpers
-Logging setup, countdown, rate-limit delay, log cleanup, HTTP retry.
+Logging setup, countdown, rate-limit delay, log cleanup.
 """
-import csv
 import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
-
-import requests
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -207,50 +204,3 @@ def clean_old_logs(log_dir: str, max_days: int = 30) -> None:
                 logger.debug(f"Removed old log: {file.name}")
         except Exception as e:
             logger.warning(f"Could not remove {file}: {e}")
-
-
-# =============================================================================
-# Retry helper
-# =============================================================================
-
-def request_with_backoff(
-    session: requests.Session,
-    method: str,
-    url: str,
-    max_retries: int = 3,
-    retry_delay: int = 2,
-    **kwargs,
-) -> requests.Response:
-    """Make a request with exponential backoff retry."""
-    last_exception = None
-    last_response: Optional[requests.Response] = None
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = session.request(method, url, **kwargs)
-
-            if response.status_code == 429:
-                last_response = response
-                if attempt == max_retries:
-                    # Out of attempts — hand the 429 back so the caller can
-                    # inspect it, rather than raising a generic error that
-                    # discards the response entirely.
-                    logger.warning("Rate limited and out of retries; returning 429")
-                    return response
-                delay = retry_delay * (2 ** (attempt - 1))
-                logger.warning(f"Rate limited, waiting {delay}s (attempt {attempt})")
-                time.sleep(delay)
-                continue
-
-            return response
-
-        except requests.RequestException as e:
-            last_exception = e
-            if attempt < max_retries:
-                delay = retry_delay * (2 ** (attempt - 1))
-                logger.warning(f"Request failed: {e}. Retrying in {delay}s...")
-                time.sleep(delay)
-
-    if last_response is not None:
-        return last_response
-    raise last_exception or requests.RequestException("Request failed after retries")

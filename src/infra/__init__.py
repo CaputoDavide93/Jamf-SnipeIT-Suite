@@ -7,7 +7,6 @@ from .helpers import (
     wait_with_countdown,
     rate_limit_delay,
     clean_old_logs,
-    request_with_backoff,
 )
 from .audit_csv import AuditCSV
 from .progress import ProgressTracker
@@ -18,7 +17,6 @@ __all__ = [
     "wait_with_countdown",
     "rate_limit_delay",
     "clean_old_logs",
-    "request_with_backoff",
     "AuditCSV",
     "ProgressTracker",
     "HealthCheckServer",

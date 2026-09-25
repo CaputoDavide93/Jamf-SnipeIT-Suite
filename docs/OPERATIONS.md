@@ -11,6 +11,7 @@ placeholders. Substitute them before running any command below:
 |-------------|---------------------------|
 | `<AWS_ACCOUNT_ID>` | `aws sts get-caller-identity --query Account --output text` |
 | `<SUBNET_ID>` / `<SECURITY_GROUP_ID>` | `terraform output` in `terraform/environments/prod`, or the ECS service's network config in the console |
+| `<SLACK_CHANNEL_ID>` | The `slack_channel_id` value in your `terraform.tfvars` / SSM |
 
 `./scripts/deploy.sh` resolves the account ID itself — prefer it over the manual
 Docker commands where you can.
@@ -19,7 +20,7 @@ Docker commands where you can.
 
 The system runs automatically at 06:00 UTC. You should only need to check:
 
-1. **Slack channel** (`C0AGENA7P43`) — only posts when there's something to action
+1. **Slack channel** (`<SLACK_CHANNEL_ID>`) — only posts when there's something to action
 2. **CloudWatch logs** — `/ecs/jamf-snipeit-suite-prod` if you want to see full run details
 
 ### What Slack alerts mean
@@ -105,8 +106,6 @@ When matching consistently picks the wrong Snipe-IT user for a given Jamf local 
 
 ### Onboarding a new SSO (SAML) user in Snipe-IT
 
-> Consolidated version with troubleshooting table: [Confluence — Snipe-IT: Platform, Operations & Migration, Part 1](https://xsolutions.atlassian.net/wiki/pages/viewpage.action?pageId=4609245190)
-
 **Background (2026-08-05):** the Snipe-IT EC2 migration surfaced a real gap — Snipe-IT's SAML login hardcodes matching the IdP's `emailaddress` claim (a full email address) against the local `username` column. Nearly every Snipe-IT user has a short-form `username` (`firstname.lastname`, no `@domain`) because that's what the Jamf-device-matching logic in this suite (`UserMatcher`) is built around. The two are incompatible for any user who actually needs to log into Snipe-IT via SSO.
 
 `username_standardize.py` runs on a schedule and actively converts any `username` containing `@` back to short form — so a manual fix to `username` alone will get silently reverted.
@@ -118,9 +117,9 @@ When someone new needs SAML login access to Snipe-IT:
 3. Add that email (lowercase) to `preserved_usernames` in `config/user_overrides.json`:
    ```json
    "preserved_usernames": [
-     "davide.caputo@xdesign.com",
-     "daniel.mcmanus@createfuture.com",
-     "new.person@createfuture.com"
+     "jane.doe@example.com",
+     "john.smith@example.com",
+     "new.person@example.com"
    ]
    ```
    This is the only thing that stops `username_standardize.py` reverting the change on its next scheduled run.

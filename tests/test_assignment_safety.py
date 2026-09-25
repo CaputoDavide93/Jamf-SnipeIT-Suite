@@ -618,9 +618,9 @@ def test_jamf_update_not_needed_when_ea_and_location_already_match():
     from modules.sync.user_match import UserMatchModule
 
     location = {
-        "username": "meganwilkie",
-        "real_name": "Megan Macdougall",
-        "email_address": "megan.macdougall@createfuture.com",
+        "username": "marymajor",
+        "real_name": "Mary Major",
+        "email_address": "mary.major@example.com",
         "position": "Engineer",
     }
     eas = [
@@ -629,8 +629,8 @@ def test_jamf_update_not_needed_when_ea_and_location_already_match():
     ]
     assert UserMatchModule._jamf_update_needed(
         location, eas,
-        username="meganwilkie", realname="Megan Macdougall",
-        email="megan.macdougall@createfuture.com", position="Engineer",
+        username="marymajor", realname="Mary Major",
+        email="mary.major@example.com", position="Engineer",
         ea_name="SnipeIT_Asset_ID", ea_value="2127",
     ) is False
 
@@ -640,15 +640,15 @@ def test_jamf_update_needed_when_extension_attributes_absent():
     from modules.sync.user_match import UserMatchModule
 
     location = {
-        "username": "meganwilkie",
-        "real_name": "Megan Macdougall",
-        "email_address": "megan.macdougall@createfuture.com",
+        "username": "marymajor",
+        "real_name": "Mary Major",
+        "email_address": "mary.major@example.com",
         "position": "Engineer",
     }
     assert UserMatchModule._jamf_update_needed(
         location, [],
-        username="meganwilkie", realname="Megan Macdougall",
-        email="megan.macdougall@createfuture.com", position="Engineer",
+        username="marymajor", realname="Mary Major",
+        email="mary.major@example.com", position="Engineer",
         ea_name="SnipeIT_Asset_ID", ea_value="2127",
     ) is True
 

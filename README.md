@@ -56,23 +56,34 @@ This suite closes the loop automatically:
 - 🔒 **Concurrency-safe** — every scheduled job serialises on a distributed mutex (SSM-backed); overlapping runs are skipped, never interleaved
 - 🧪 **Dry-run everywhere** — every mutating module supports `--dry-run`; the newest modules default to it via a config safety latch
 - 📣 **Slack reporting** — run summaries, error alerts, and human-decision queues (ambiguous re-hires) delivered to a channel
+- 🚨 **Failure alerting** — any scheduled task that exits non-zero or never starts is pushed to an SNS topic (plus optional email); schedules that fail to launch raise a CloudWatch alarm
+- 🧱 **Hardened container** — Debian trixie slim base patched at build time, non-root user, read-only root filesystem with ephemeral scratch mounts, weekly patch rebuilds from a `:base` tag
 
 ## 🏗 Architecture
 
 ```mermaid
 flowchart LR
-    EB["⏰ EventBridge<br>4 cron rules"]
+    EB["⏰ EventBridge<br>5 cron rules"]
 
     subgraph AWS["☁️ AWS (eu-west-1)"]
         direction TB
-        TASK["🐳 ECS Fargate task (linux/amd64)<br>docker_scheduler — RunMutex-serialised modules"]
+        subgraph VPC["🔒 VPC (shared with Snipe-IT)"]
+            TASK["🐳 ECS Fargate task (linux/amd64)<br>read-only rootfs · RunMutex-serialised modules"]
+        end
         SSM["🔐 SSM Parameter Store<br>(secrets + mutex)"]
-        ECR["📦 ECR image (:latest)"]
+        ECR["📦 ECR image<br>(:latest + :base)"]
+        CW["📈 CloudWatch Logs"]
+        ALERT["🚨 Task-failure rule<br>+ FailedInvocations alarms"]
+        SNS["📨 SNS alerts topic"]
         TASK --> SSM
         ECR --> TASK
+        TASK --> CW
+        TASK -. stopped non-zero .-> ALERT
+        ALERT --> SNS
     end
 
     EB --> TASK
+    EB -. launch failure .-> ALERT
 
     TASK <--> JAMF["🖥️ Jamf Pro (MDM)"]
     TASK <--> SNIPE["📦 Snipe-IT (asset register)"]
@@ -270,7 +281,9 @@ Every mutating command accepts `--dry-run` / `-n` and prints exactly what it *wo
 
 ## ☁️ Production Deployment (AWS)
 
-Production runs as **five EventBridge rules → one Fargate task definition** (`RUN_MODE` decides the module set). The task reads secrets from SSM at start; the image ships from ECR.
+Production runs as **five EventBridge rules → one Fargate task definition** (`RUN_MODE` decides the module set). The task reads secrets from SSM at start; the image ships from ECR. Tasks can run inside the Snipe-IT VPC (`vpc_id` / `subnet_ids` in `terraform.tfvars`) so Snipe-IT is reached over its private IP even when its public endpoint is IP-restricted.
+
+The one-shot path is `./scripts/deploy.sh`: Terraform plan/apply, then build and push `:latest` plus a `:base` tag (the weekly patch-rebuild job builds `FROM` it, and the ECR lifecycle policy protects both tags). The manual equivalent:
 
 ```bash
 # 1. ECR login (12h token)
@@ -284,6 +297,8 @@ docker build --platform linux/amd64 \
 # 3. Push — next EventBridge trigger picks it up automatically
 docker push <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-prod:latest
 ```
+
+**Failure alerts:** set `alerts_topic_arn` (shared SNS topic) and/or `alarm_email` in `terraform.tfvars`. An EventBridge rule on *ECS Task State Change* forwards any task that stops with a non-zero exit code or `TaskFailedToStart`; a per-schedule `FailedInvocations` alarm catches RunTask launch failures, where no task ever exists.
 
 > ⚠️ **Config changes ≠ code changes.** Fargate never reads `config.yaml` — non-secret settings live in the **task-definition environment**. To change one: register a new task-def revision, then repoint all four EventBridge rule targets to it. See [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
@@ -300,13 +315,15 @@ docker push <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-
 | ⏸️ *Pending*, never delete | Any destructive action on leaver data |
 | 📴 HiBob strictly read-only | Any write ever reaching the HR source of truth |
 | 🔒 Dry-run safety latch on Cleanup (added 2026-08-05) | Merging/deleting a user account on an email-collision false positive |
+| 🧱 Read-only root filesystem (only `/tmp`, `/app/logs`, `/app/output` writable) | Code or dependencies being modified at runtime |
+| 🚨 Task-failure + launch-failure alerts to SNS | A scheduled run failing silently |
 
 ## 📁 Repo Structure
 
 ```text
 Jamf-SnipeIT-Suite/
 ├── src/
-│   ├── clients/            # 🔌 Thin, retrying API clients (jamf, snipeit, azure, hibob, slack)
+│   ├── clients/            # 🔌 Thin, retrying synchronous API clients (jamf, snipeit, azure, hibob, slack)
 │   ├── core/               # ⚙️ Config schema, client factory, run context, sync state
 │   ├── matching/           # 🧠 UserMatcher scoring engine + AI resolver
 │   ├── infra/              # 🧱 RunMutex, health server, audit CSV, shared helpers
@@ -318,7 +335,7 @@ Jamf-SnipeIT-Suite/
 │   ├── main.py             # 🎛️ CLI entry point (interactive menu + subcommands)
 │   └── docker_scheduler.py # ⏰ Container entry point (APScheduler + health endpoint)
 ├── config/                 # 📝 config.yaml.example + equipment mapping
-├── terraform/              # ☁️ AWS infra (ECS, ECR, EventBridge, SSM, IAM)
+├── terraform/              # ☁️ AWS infra (ECS, ECR, EventBridge, SSM, IAM, failure alerts)
 ├── tests/                  # 🧪 pytest suite
 ├── tools/                  # 🤖 gen_modules_doc.py (README inventory generator)
 ├── docs/                   # 📚 OPERATIONS.md runbook
@@ -335,16 +352,23 @@ pytest tests/ -v        # matcher scoring, lifecycle classification,
                         # azure-starters user creation (passwords, username convention)
 ```
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the suite on every push/PR against the pinned lockfile (`requirements.lock.txt`) and fails if the generated module inventory is stale (`python tools/gen_modules_doc.py --check`).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push/PR with SHA-pinned actions:
 
-Dependencies are pinned for reproducible builds: `requirements.txt` is the human-edited abstract list, `requirements.lock.txt` (generated via `pip freeze`) is what the Docker build and CI actually install from. Regenerate it after changing `requirements.txt`:
+| Job | Checks |
+|-----|--------|
+| 🐍 `test` | `ruff check .` (baseline in [`ruff.toml`](ruff.toml)), `pytest` against the pinned lockfile, and a stale-inventory check (`python tools/gen_modules_doc.py --check`) |
+| ☁️ `terraform` | `terraform fmt -check -recursive` and `terraform validate` (no backend) |
+
+Local hooks via [pre-commit](https://pre-commit.com) (`pre-commit install`): **gitleaks** secret scan and **ruff**. Dependabot keeps pip, GitHub Actions, the Docker base image and Terraform providers current.
+
+Dependencies are pinned for reproducible builds: `requirements.txt` is the human-edited abstract list, `requirements.lock.txt` is what the Docker build and CI actually install from. It holds **runtime dependencies only** (no pytest/ruff/dev tooling in the image). Regenerate it from a clean venv after changing `requirements.txt`:
 ```bash
-.venv/bin/pip freeze > requirements.lock.txt   # review the diff before committing
+python3 -m venv /tmp/lockenv && /tmp/lockenv/bin/pip install -r requirements.txt
+/tmp/lockenv/bin/pip freeze > requirements.lock.txt   # review the diff before committing
 ```
 
 ## 📚 Documentation
 
-- 📖 **Full architecture & operations** → [Confluence: Snipe-IT — Platform, Operations & Migration](https://xsolutions.atlassian.net/wiki/pages/viewpage.action?pageId=4609245190)
 - 🔧 **Runbook** (deploys, schedules, secret rotation, mutex) → [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 - 🤝 **Contributing** → [`CONTRIBUTING.md`](CONTRIBUTING.md)
 

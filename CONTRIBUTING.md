@@ -224,7 +224,7 @@ Jamf-SnipeIT-Suite/
 
 - Open an issue for questions
 - Check existing documentation
-- Email: CaputoDav@gmail.com
+- Security issues: use [private vulnerability reporting](../../security/advisories/new) (see [SECURITY.md](SECURITY.md))
 
 ---
 

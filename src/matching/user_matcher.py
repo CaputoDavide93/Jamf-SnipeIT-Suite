@@ -192,8 +192,8 @@ class UserMatcher:
             return matches[0]
         if len(matches) > 1:
             # Try to disambiguate using the Jamf username as email prefix
-            # e.g. two "Ivaylo Dimitrov" but username "ivaylodimitrov" matches
-            # ivaylo.dimitrov@ (not ivaylo.dimitrov1@)
+            # e.g. two "Alex Morgan" but username "alexmorgan" matches
+            # alex.morgan@ (not alex.morgan1@)
             if username_hint:
                 hint_norm = username_hint.lower().replace(".", "").replace("-", "").replace("_", "")
                 for m in matches:
@@ -263,7 +263,7 @@ class UserMatcher:
         debug_info: Dict[str, Any] = {"exact_hit_reason": None, "top_candidates": []}
 
         # Defensive: strip email domain if caller passed an email as username
-        # (e.g. "louisa.murray@createfuture.com" -> "louisa.murray")
+        # (e.g. "jane.doe@company.com" -> "jane.doe")
         if username and "@" in username:
             # If no original_email was set, use the full email for lookup
             if not original_email:
@@ -548,7 +548,7 @@ def pick_primary_local_identity(
         full_name = (user.get("realname") or user.get("real_name") or "").strip()
 
         # Strip email domain if someone used email as local account name
-        # (e.g. "Louisa.murray@createfuture.com" -> "Louisa.murray")
+        # (e.g. "Jane.Doe@company.com" -> "Jane.Doe")
         if "@" in username:
             username = username.split("@", 1)[0]
 

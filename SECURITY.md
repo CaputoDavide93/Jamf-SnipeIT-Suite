@@ -84,7 +84,7 @@ aws ssm put-parameter \
 
 ## Reporting a vulnerability
 
-Email the maintainer at **CaputoDav@gmail.com**. Do not open a public GitHub issue.
+Report it privately through GitHub's **[private vulnerability reporting](../../security/advisories/new)** (Security tab → "Report a vulnerability"). Do not open a public GitHub issue.
 
 Expected response:
 - Acknowledgement: within 48 hours
@@ -104,4 +104,4 @@ Before opening a PR, verify:
 
 ---
 
-**Maintained by:** Davide Caputo (CaputoDav@gmail.com)
+**Maintained by:** [Davide Caputo](https://github.com/CaputoDavide93)

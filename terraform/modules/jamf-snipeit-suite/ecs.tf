@@ -44,10 +44,34 @@ resource "aws_ecs_task_definition" "app" {
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.ecs_task.arn
 
+  # Scratch space for a read-only root filesystem. Fargate task storage is
+  # ephemeral and populated from the image path (keeps appuser ownership).
+  volume {
+    name = "tmp"
+  }
+
+  volume {
+    name = "logs"
+  }
+
+  volume {
+    name = "output"
+  }
+
   container_definitions = jsonencode([{
     name      = "app"
     image     = "${aws_ecr_repository.app.repository_url}:latest"
     essential = true
+
+    # Image code is immutable at runtime; only the mounts below are writable:
+    # /tmp (tempfile, boto3), /app/logs (log files, audit CSVs),
+    # /app/output (AI cache, sync state, retry queue, reconciliation CSVs)
+    readonlyRootFilesystem = true
+    mountPoints = [
+      { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false },
+      { sourceVolume = "logs", containerPath = "/app/logs", readOnly = false },
+      { sourceVolume = "output", containerPath = "/app/output", readOnly = false },
+    ]
 
     # Non-sensitive configuration only
     environment = concat(

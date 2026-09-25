@@ -10,13 +10,13 @@ from matching.user_matcher import UserMatcher, pick_primary_local_identity
 # ----- fixtures -----
 
 SNIPE_USERS = [
-    {"id": 1, "name": "Thomas Ford", "email": "thomas.ford@company.com", "username": "thomas.ford"},
-    {"id": 2, "name": "James Ford", "email": "james.ford@company.com", "username": "james.ford"},
+    {"id": 1, "name": "Peter Grant", "email": "peter.grant@company.com", "username": "peter.grant"},
+    {"id": 2, "name": "Paul Grant", "email": "paul.grant@company.com", "username": "paul.grant"},
     {"id": 3, "name": "Jane Sommers", "email": "jane.sommers@company.com", "username": "jane.winters"},  # old username, new name
-    {"id": 4, "name": "Ivaylo Dimitrov", "email": "ivaylo.dimitrov@company.com", "username": "ivaylo.dimitrov"},
-    {"id": 5, "name": "Ivaylo Dimitrov", "email": "ivaylo.dimitrov1@company.com", "username": "ivaylo.dimitrov1"},
-    {"id": 6, "name": "[Disabled] Kane Fulton", "email": "kane.fulton@company.com", "username": "kane.fulton"},
-    {"id": 7, "name": "Daniel Sample", "email": "daniel.sample@company.com", "username": "daniel.sample"},
+    {"id": 4, "name": "Alex Morgan", "email": "alex.morgan@company.com", "username": "alex.morgan"},
+    {"id": 5, "name": "Alex Morgan", "email": "alex.morgan1@company.com", "username": "alex.morgan1"},
+    {"id": 6, "name": "[Disabled] Chris Hale", "email": "chris.hale@company.com", "username": "chris.hale"},
+    {"id": 7, "name": "Sam Sample", "email": "sam.sample@company.com", "username": "sam.sample"},
 ]
 
 
@@ -32,16 +32,16 @@ def make_matcher(overrides=None):
 
 def test_override_wins_everything():
     m = make_matcher(overrides={
-        "kane": {"snipe_user_id": 7, "snipe_user_name": "Daniel", "reason": "reassigned"},
+        "chris": {"snipe_user_id": 7, "snipe_user_name": "Sam", "reason": "reassigned"},
     })
-    match, _ = m.best_match(full_name_hint="Kane", username="kane")
-    assert match["id"] == 7  # override -> Daniel, not Kane Fulton
+    match, _ = m.best_match(full_name_hint="Chris", username="chris")
+    assert match["id"] == 7  # override -> Sam, not Chris Hale
 
 
 def test_override_normalised_key():
     """Override key should be case/separator insensitive."""
     m = make_matcher(overrides={
-        "mattpersonal": {"snipe_user_id": 1, "snipe_user_name": "Thomas Ford", "reason": "test"},
+        "mattpersonal": {"snipe_user_id": 1, "snipe_user_name": "Peter Grant", "reason": "test"},
     })
     for variant in ["matt-personal", "matt.personal", "MATTPERSONAL", "matt_personal"]:
         match, _ = m.best_match(username=variant)
@@ -53,19 +53,19 @@ def test_override_normalised_key():
 
 def test_full_name_exact():
     m = make_matcher()
-    match, _ = m.best_match(full_name_hint="Thomas Ford", username="thomas.ford")
+    match, _ = m.best_match(full_name_hint="Peter Grant", username="peter.grant")
     assert match["id"] == 1
 
 
 def test_full_name_ambiguous_disambiguate_by_email_prefix():
-    """Two 'Ivaylo Dimitrov' — use username to pick the right email."""
+    """Two 'Alex Morgan' — use username to pick the right email."""
     m = make_matcher()
-    # Username ivaylodimitrov matches email prefix ivaylo.dimitrov → pick id=4
-    match, _ = m.best_match(full_name_hint="Ivaylo Dimitrov", username="ivaylodimitrov")
+    # Username alexmorgan matches email prefix alex.morgan → pick id=4
+    match, _ = m.best_match(full_name_hint="Alex Morgan", username="alexmorgan")
     assert match["id"] == 4
 
-    # Username ivaylodimitrov1 matches id=5's email prefix
-    match, _ = m.best_match(full_name_hint="Ivaylo Dimitrov", username="ivaylodimitrov1")
+    # Username alexmorgan1 matches id=5's email prefix
+    match, _ = m.best_match(full_name_hint="Alex Morgan", username="alexmorgan1")
     assert match["id"] == 5
 
 
@@ -89,7 +89,7 @@ def test_disabled_users_not_filtered_out_of_pool():
     """[Disabled] users are in the pool — matching shouldn't ignore them
     because Correction may need to detect 'was assigned to disabled user'."""
     m = make_matcher()
-    match, _ = m.best_match(full_name_hint="Kane Fulton", username="kane.fulton")
+    match, _ = m.best_match(full_name_hint="Chris Hale", username="chris.hale")
     assert match is not None
     assert match["name"].startswith("[Disabled]")
 
@@ -133,24 +133,24 @@ def test_pick_primary_empty():
 
 
 def test_pick_primary_strips_email_domain():
-    """Local account 'louisa.murray@createfuture.com' -> username 'louisa.murray'."""
-    local = [{"name": "louisa.murray@createfuture.com", "realname": "Louisa Murray"}]
+    """Local account 'lucy.grey@acme.com' -> username 'lucy.grey'."""
+    local = [{"name": "lucy.grey@acme.com", "realname": "Lucy Grey"}]
     uname, fullname, _ = pick_primary_local_identity(local)
-    assert uname == "louisa.murray"
-    assert fullname == "Louisa Murray"
+    assert uname == "lucy.grey"
+    assert fullname == "Lucy Grey"
 
 
 def test_best_match_strips_email_username():
-    """best_match called with 'louisa.murray@createfuture.com' should strip
-    domain before matching (prevents fuzzy from matching 'CreateFuture' org)."""
+    """best_match called with 'lucy.grey@acme.com' should strip
+    domain before matching (prevents fuzzy from matching 'Acme' org)."""
     USERS = [
-        {"id": 1, "name": "Louisa Murray", "email": "louisa.murray@company.com", "username": "louisa.murray"},
-        {"id": 2, "name": "CreateFuture Receivables", "email": "receivables@company.com", "username": "receivables"},
+        {"id": 1, "name": "Lucy Grey", "email": "lucy.grey@company.com", "username": "lucy.grey"},
+        {"id": 2, "name": "Acme Receivables", "email": "receivables@company.com", "username": "receivables"},
     ]
     m = UserMatcher(users=USERS, email_domain="company.com")
     match, debug = m.best_match(
-        full_name_hint="Louisa.murray@createfuture.com",
-        username="louisa.murray@createfuture.com",
+        full_name_hint="Lucy.grey@acme.com",
+        username="lucy.grey@acme.com",
     )
     assert match is not None
     assert match["id"] == 1
