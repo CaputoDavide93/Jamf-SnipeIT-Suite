@@ -1,3 +1,5 @@
+<div align="center">
+
 # 🔄 Jamf-SnipeIT Suite
 
 **Unattended asset-lifecycle automation across Jamf Pro, Snipe-IT, Azure AD / Entra ID, and HiBob — serverless on AWS Fargate**
@@ -8,26 +10,30 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 [![CI](https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite/actions/workflows/ci.yml/badge.svg)](https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite/actions/workflows/ci.yml)
 
+</div>
+
 ---
 
 ## 📋 Table of Contents
 
 - [Overview](#-overview)
 - [Features](#-features)
-- [Architecture](#-architecture)
+- [Architecture](#️-architecture)
 - [Modules](#-modules)
   - [Lifecycle](#lifecycle)
   - [Sync](#sync)
   - [Maintenance](#maintenance)
 - [The User Lifecycle Model](#-the-user-lifecycle-model)
 - [Schedule](#-schedule)
-- [Installation](#-installation)
-- [Configuration](#-configuration)
+- [Quick Start](#-quick-start)
+- [Configuration](#️-configuration)
 - [Usage](#-usage)
-- [Production Deployment (AWS)](#-production-deployment-aws)
-- [Safety Model](#-safety-model)
+- [Repo structure](#-repo-structure)
 - [Testing](#-testing)
+- [Deployment (AWS)](#-deployment-aws)
+- [Safety Model](#️-safety-model)
 - [Documentation](#-documentation)
+- [License](#-license)
 
 ---
 
@@ -45,21 +51,27 @@ This suite closes the loop automatically:
 | 🔑 **Azure AD / Entra ID** | Identity — account status, group membership, job titles |
 | 👥 **HiBob** | **HR source of truth** — employment status, equipment entitlements *(read-only, never written to)* |
 
+---
+
 ## ✨ Features
 
-- 🤝 **Zero-touch user provisioning** — new starters (including contractors) appear in Snipe-IT before their first Monday
-- 🔁 **Re-hire detection** — employees who leave and return (even next-day) are automatically un-ghosted and get their machine assignment restored
-- 🧠 **Multi-strategy user matching** — exact / email / normalised-username / fuzzy scoring, with an AI resolver for genuinely ambiguous cases and manual overrides as the final word
-- 🚪 **Leaver processing** — departed users' assets flip to *Pending*, accounts are tagged `[Disabled]`, nothing is deleted
-- 🧾 **Accessory sync from HR** — HiBob equipment entitlements become Snipe-IT accessory checkouts
-- 🛠️ **Self-healing** — a correction module continuously repairs wrong assignments; a health-check scans for stuck states twice a week
-- 🔒 **Concurrency-safe** — every scheduled job serialises on a distributed mutex (SSM-backed); overlapping runs are skipped, never interleaved
-- 🧪 **Dry-run everywhere** — every mutating module supports `--dry-run`; the newest modules default to it via a config safety latch
-- 📣 **Slack reporting** — run summaries, error alerts, and human-decision queues (ambiguous re-hires) delivered to a channel
-- 🚨 **Failure alerting** — any scheduled task that exits non-zero or never starts is pushed to an SNS topic (plus optional email); schedules that fail to launch raise a CloudWatch alarm
-- 🧱 **Hardened container** — Debian trixie slim base patched at build time, non-root user, read-only root filesystem with ephemeral scratch mounts, weekly patch rebuilds from a `:base` tag
+| | Feature | What it does |
+|---|---|---|
+| 🤝 | Zero-touch user provisioning | New starters (including contractors) appear in Snipe-IT before their first Monday |
+| 🔁 | Re-hire detection | Employees who leave and return (even next-day) are automatically un-ghosted and get their machine assignment restored |
+| 🧠 | Multi-strategy user matching | Exact / email / normalised-username / fuzzy scoring, with an AI resolver for genuinely ambiguous cases and manual overrides as the final word |
+| 🚪 | Leaver processing | Departed users' assets flip to *Pending*, accounts are tagged `[Disabled]`, nothing is deleted |
+| 🧾 | Accessory sync from HR | HiBob equipment entitlements become Snipe-IT accessory checkouts |
+| 🛠️ | Self-healing | A correction module continuously repairs wrong assignments; a health-check scans for stuck states twice a week |
+| 🔒 | Concurrency-safe | Every scheduled job serialises on a distributed mutex (SSM-backed); overlapping runs are skipped, never interleaved |
+| 🧪 | Dry-run everywhere | Every mutating module supports `--dry-run`; the newest modules default to it via a config safety latch |
+| 📣 | Slack reporting | Run summaries, error alerts, and human-decision queues (ambiguous re-hires) delivered to a channel |
+| 🚨 | Failure alerting | Any scheduled task that exits non-zero or never starts is pushed to an SNS topic (plus optional email); schedules that fail to launch raise a CloudWatch alarm |
+| 🧱 | Hardened container | Debian trixie slim base patched at build time, non-root user, read-only root filesystem with ephemeral scratch mounts, weekly patch rebuilds from a `:base` tag |
 
-## 🏗 Architecture
+---
+
+## 🗺️ Architecture
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
@@ -72,6 +84,8 @@ This suite closes the loop automatically:
 </picture>
 
 Every rule fires the same task definition; the `RUN_MODE` and command each rule passes decide which modules run, and every job holds the SSM-backed `RunMutex`. The task can run inside the Snipe-IT VPC so Snipe-IT is reached over its private IP.
+
+---
 
 ## 🧩 Modules
 
@@ -144,6 +158,8 @@ Every rule fires the same task definition; the `RUN_MODE` and command each rule 
 
 > The **Scheduler default** column is the built-in cron each job falls back to in the container scheduler (`src/docker_scheduler.py`) — `config.yaml` `jobs:` entries override it, and production timing is ultimately set by the EventBridge rules in `terraform/`.
 
+---
+
 ## 🔄 The User Lifecycle Model
 
 The suite models the full employee journey, including the awkward paths most tooling ignores:
@@ -166,6 +182,8 @@ A `[Disabled]` user is **automatically restored** only when **four independent s
 
 Anything less (e.g. AAD enabled but still in the leavers group) is classified **ambiguous** and reported to Slack for a human decision — the suite never guesses on people.
 
+---
+
 ## ⏰ Schedule
 
 All jobs run in `Europe/London`, serialised under the run mutex. Local scheduler crons:
@@ -185,7 +203,9 @@ All jobs run in `Europe/London`, serialised under the run mutex. Local scheduler
 
 > 🔐 **Why 30-minute slots?** A slow module can never overlap the next one — and even if it did, the per-job mutex skips (never interleaves) the collision.
 
-## 📥 Installation
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
@@ -195,7 +215,7 @@ All jobs run in `Europe/London`, serialised under the run mutex. Local scheduler
 ### Local
 
 ```bash
-git clone <repo-url> && cd Jamf-SnipeIT-Suite
+git clone https://github.com/CaputoDavide93/Jamf-SnipeIT-Suite.git && cd Jamf-SnipeIT-Suite
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp config/config.example.yaml config/config.yaml   # fill in credentials
@@ -208,6 +228,8 @@ python src/main.py                                  # interactive menu
 cp config/config.example.yaml config/config.yaml
 docker compose up          # scheduler mode with health endpoint
 ```
+
+---
 
 ## ⚙️ Configuration
 
@@ -240,7 +262,9 @@ Env-only deployments use `MODULE_<CANONICAL_NAME>_ENABLED` and
 `MODULE_USER_MATCH_DRY_RUN=true`. Terraform exposes the same controls through
 `module_enabled_overrides` and `module_dry_run_overrides` maps.
 
-## 🚀 Usage
+---
+
+## 📖 Usage
 
 ```bash
 # Interactive menu (all modules, guided)
@@ -261,46 +285,9 @@ RUN_MODE=scheduler python src/docker_scheduler.py --config config/config.yaml
 
 Every mutating command accepts `--dry-run` / `-n` and prints exactly what it *would* change.
 
-## ☁️ Production Deployment (AWS)
+---
 
-Production runs as **five EventBridge rules → one Fargate task definition** (`RUN_MODE` decides the module set). The task reads secrets from SSM at start; the image ships from ECR. Tasks can run inside the Snipe-IT VPC (`vpc_id` / `subnet_ids` in `terraform.tfvars`) so Snipe-IT is reached over its private IP even when its public endpoint is IP-restricted.
-
-The one-shot path is `./scripts/deploy.sh`: Terraform plan/apply, then build and push `:latest` plus a `:base` tag (the weekly patch-rebuild job builds `FROM` it, and the ECR lifecycle policy protects both tags). The manual equivalent:
-
-```bash
-# 1. ECR login (12h token)
-aws ecr get-login-password --region eu-west-1 \
-  | docker login --username AWS --password-stdin <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com
-
-# 2. Build — MUST be linux/amd64 (ARM64 silently fails on Fargate)
-docker build --platform linux/amd64 \
-  -t <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-prod:latest .
-
-# 3. Push — next EventBridge trigger picks it up automatically
-docker push <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-prod:latest
-```
-
-**Failure alerts:** set `alerts_topic_arn` (shared SNS topic) and/or `alarm_email` in `terraform.tfvars`. An EventBridge rule on *ECS Task State Change* forwards any task that stops with a non-zero exit code or `TaskFailedToStart`; a per-schedule `FailedInvocations` alarm catches RunTask launch failures, where no task ever exists.
-
-> ⚠️ **Config changes ≠ code changes.** Fargate never reads `config.yaml` — non-secret settings live in the **task-definition environment**. To change one: register a new task-def revision, then repoint all five EventBridge rule targets to it. See [`docs/operations.md`](docs/operations.md).
-
-## 🛡 Safety Model
-
-| Guard | Protects against |
-|-------|------------------|
-| 🔒 Fail-closed distributed `RunMutex` (SSM) on **every** job | Overlapping or unlocked runs reverting each other's work |
-| 🧪 Dry-run safety latch on new modules | A new module going live before its output is reviewed |
-| 🕶️ Tokenised AI-audit payloads by default | Employee and device identifiers leaving the trust boundary |
-| 🤝 4-signal re-hire confirmation incl. HiBob | Un-ghosting someone who is actually leaving |
-| 🙋 Ambiguous-case human queue (Slack) | Automated guesses on people's employment state |
-| 🧯 Fetch-integrity aborts | An empty API response triggering mass duplicate creation |
-| ⏸️ *Pending*, never delete | Any destructive action on leaver data |
-| 📴 HiBob strictly read-only | Any write ever reaching the HR source of truth |
-| 🔒 Dry-run safety latch on Cleanup (added 2026-08-05) | Merging/deleting a user account on an email-collision false positive |
-| 🧱 Read-only root filesystem (only `/tmp`, `/app/logs`, `/app/output` writable) | Code or dependencies being modified at runtime |
-| 🚨 Task-failure + launch-failure alerts to SNS | A scheduled run failing silently |
-
-## 📁 Repo Structure
+## 📁 Repo structure
 
 ```text
 Jamf-SnipeIT-Suite/
@@ -350,12 +337,62 @@ python3 -m venv /tmp/lockenv && /tmp/lockenv/bin/pip install -r requirements.txt
 /tmp/lockenv/bin/pip freeze > requirements.lock.txt   # review the diff before committing
 ```
 
+---
+
+## 📦 Deployment (AWS)
+
+Production runs as **five EventBridge rules → one Fargate task definition** (`RUN_MODE` decides the module set). The task reads secrets from SSM at start; the image ships from ECR. Tasks can run inside the Snipe-IT VPC (`vpc_id` / `subnet_ids` in `terraform.tfvars`) so Snipe-IT is reached over its private IP even when its public endpoint is IP-restricted.
+
+The one-shot path is `./scripts/deploy.sh`: Terraform plan/apply, then build and push `:latest` plus a `:base` tag (the weekly patch-rebuild job builds `FROM` it, and the ECR lifecycle policy protects both tags). The manual equivalent:
+
+```bash
+# 1. ECR login (12h token)
+aws ecr get-login-password --region eu-west-1 \
+  | docker login --username AWS --password-stdin <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com
+
+# 2. Build — MUST be linux/amd64 (ARM64 silently fails on Fargate)
+docker build --platform linux/amd64 \
+  -t <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-prod:latest .
+
+# 3. Push — next EventBridge trigger picks it up automatically
+docker push <AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/jamf-snipeit-suite-prod:latest
+```
+
+**Failure alerts:** set `alerts_topic_arn` (shared SNS topic) and/or `alarm_email` in `terraform.tfvars`. An EventBridge rule on *ECS Task State Change* forwards any task that stops with a non-zero exit code or `TaskFailedToStart`; a per-schedule `FailedInvocations` alarm catches RunTask launch failures, where no task ever exists.
+
+> ⚠️ **Config changes ≠ code changes.** Fargate never reads `config.yaml` — non-secret settings live in the **task-definition environment**. To change one: register a new task-def revision, then repoint all five EventBridge rule targets to it. See [`docs/operations.md`](docs/operations.md).
+
+---
+
+## 🛡️ Safety Model
+
+| Guard | Protects against |
+|-------|------------------|
+| 🔒 Fail-closed distributed `RunMutex` (SSM) on **every** job | Overlapping or unlocked runs reverting each other's work |
+| 🧪 Dry-run safety latch on new modules | A new module going live before its output is reviewed |
+| 🕶️ Tokenised AI-audit payloads by default | Employee and device identifiers leaving the trust boundary |
+| 🤝 4-signal re-hire confirmation incl. HiBob | Un-ghosting someone who is actually leaving |
+| 🙋 Ambiguous-case human queue (Slack) | Automated guesses on people's employment state |
+| 🧯 Fetch-integrity aborts | An empty API response triggering mass duplicate creation |
+| ⏸️ *Pending*, never delete | Any destructive action on leaver data |
+| 📴 HiBob strictly read-only | Any write ever reaching the HR source of truth |
+| 🔒 Dry-run safety latch on Cleanup (added 2026-08-05) | Merging/deleting a user account on an email-collision false positive |
+| 🧱 Read-only root filesystem (only `/tmp`, `/app/logs`, `/app/output` writable) | Code or dependencies being modified at runtime |
+| 🚨 Task-failure + launch-failure alerts to SNS | A scheduled run failing silently |
+
+---
+
 ## 📚 Documentation
 
 - 🔧 **Runbook** (deploys, schedules, secret rotation, mutex) → [`docs/operations.md`](docs/operations.md)
 - 🤝 **Contributing** → [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - 🔒 **Security policy** (how to report a vulnerability) → [`SECURITY.md`](SECURITY.md)
-- 📄 **License** (MIT) → [`LICENSE`](LICENSE)
+
+---
+
+## 📄 License
+
+Released under the [MIT License](LICENSE).
 
 ---
 
