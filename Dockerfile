@@ -3,7 +3,7 @@
 # Supports both AMD64 (Intel) and ARM64 (Apple Silicon M1/M2/M3)
 
 # Stage 1: Builder (must match target platform for binary extensions like pydantic_core)
-FROM python:3.12-slim-trixie AS builder
+FROM python:3.14-slim-trixie AS builder
 
 WORKDIR /build
 
@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 
 # Stage 2: Runtime
-FROM python:3.12-slim-trixie
+FROM python:3.14-slim-trixie
 
 LABEL maintainer="Davide Caputo (https://github.com/CaputoDavide93)"
 LABEL description="Jamf-SnipeIT Suite - Unified Asset Management Tool"
