@@ -76,11 +76,10 @@ This suite closes the loop automatically:
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
   <img src="docs/assets/architecture-light.svg" width="100%"
-       alt="Five EventBridge rules run one Fargate task, which pulls its image from ECR, reads
-            secrets and the run lock from SSM, logs to CloudWatch and caches AI decisions in S3. The
-            task reads and writes Jamf Pro, Snipe-IT and Azure AD, only reads HiBob, reports to Slack
-            and asks the Anthropic API about ambiguous matches. Failed or unlaunched runs alert
-            through SNS.">
+       alt="Five EventBridge rules run one ECS Fargate task that pulls its image from ECR, keeps
+            secrets and the run lock in SSM, caches AI decisions in S3, logs to CloudWatch with SNS
+            failure alerts, reads and writes Jamf Pro and Snipe-IT, only reads Azure AD and HiBob,
+            reports to Slack and asks the Anthropic API about ambiguous matches.">
 </picture>
 
 Every rule fires the same task definition; the `RUN_MODE` and command each rule passes decide which modules run, and every job holds the SSM-backed `RunMutex`. The task can run inside the Snipe-IT VPC so Snipe-IT is reached over its private IP.
@@ -326,7 +325,7 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push/P
 
 | Job | Checks |
 |-----|--------|
-| 🐍 `test` | `ruff check .` (baseline in [`ruff.toml`](ruff.toml)), `pytest` against the pinned lockfile, and a stale-inventory check (`python tools/gen_modules_doc.py --check`) |
+| 🐍 `test` | `ruff check .` (baseline in [`ruff.toml`](ruff.toml)), `pytest` against the pinned lockfile, a stale-inventory check (`python tools/gen_modules_doc.py --check`) and a stale-diagram check (`python3 tools/gen_diagram.py --check`) |
 | ☁️ `terraform` | `terraform fmt -check -recursive` and `terraform validate` (no backend) |
 
 Local hooks via [pre-commit](https://pre-commit.com) (`pre-commit install`): **gitleaks** secret scan and **ruff**. Dependabot keeps pip, GitHub Actions, the Docker base image and Terraform providers current.

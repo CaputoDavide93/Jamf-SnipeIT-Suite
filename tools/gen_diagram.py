@@ -1,28 +1,24 @@
 #!/usr/bin/env python3
-"""Draw every diagram in this repository as SVG, one file per colour scheme.
+"""Draw this repository's diagrams as SVG, one file per colour scheme.
 
   docs/assets/<name>-light.svg
   docs/assets/<name>-dark.svg
 
-The README used to carry these as Mermaid, which GitHub renders on its own
-terms: it picks the theme, pins the version, ignores `%%{init}%%` and decodes
-HTML entities before parsing. Drawn here, the picture is exactly what is
-committed.
+House diagram kit (canonical copy: ~/.claude/skills/new-repo/assets/gen_diagram.py,
+first built for InkFrame-Immich). The engine below the "diagrams" line is shared
+verbatim across repos; only the diagram functions and DIAGRAMS change per repo.
 
-**GitHub sanitises SVG in markdown**, so no <style>, no <script>, no web font
-and no <foreignObject>. Everything is a presentation attribute and the type is
-a system stack. Each pair is served from one <picture>, which GitHub switches
-on prefers-color-scheme.
+GitHub sanitises SVG in markdown: no <style>, no <script>, no web font, no
+<foreignObject>. Everything is a presentation attribute and the type is a system
+stack. Each pair is served from one <picture>, which GitHub switches on
+prefers-color-scheme. Layout is explicit rather than solved.
 
-Layout is explicit rather than solved: these diagrams are small enough that
-placing them by hand is cheaper than a layout engine nobody can predict.
+House rules: a slate scale, a single accent on the one thing that matters in each
+picture, drawn icons rather than emoji, monospace for anything literally typed,
+text contrast at or above 4.5:1 in both schemes.
 
-House rules: a slate scale, a single accent on the one thing that matters in
-each picture, drawn icons rather than emoji, monospace for anything that is
-literally typed, and text contrast at or above 4.5:1 in both schemes.
-
-Run `python tools/gen_diagram.py` after editing; tests/test_diagrams.py fails
-if a committed SVG differs from what this file draws.
+  python3 tools/gen_diagram.py          # write the SVGs
+  python3 tools/gen_diagram.py --check  # exit 1 if any SVG is stale (for CI)
 """
 from __future__ import annotations
 
@@ -44,30 +40,61 @@ SCHEMES = {
                   warn="#ffa657", warn_soft="#2a1d14", group="#11151b"),
 }
 
-
 # Stroked glyphs on a 24x24 grid, drawn rather than typed.
 ICONS = {
-    "clock":    "M12 3a9 9 0 1 0 0 18 9 9 0 1 0 0-18z M12 7v5l3.5 2",
-    "package":  "M12 3 20 7.5v9L12 21l-8-4.5v-9z M4 7.5 12 12l8-4.5 M12 12v9",
-    "key":      "M8 8a4 4 0 1 0 0 8 4 4 0 1 0 0-8z M12 12h9 M18 12v3.5 M21 12v2.5",
-    "terminal": "M3 5h18v14H3z M7 10l3 2.5L7 15 M12.5 15h4.5",
-    "bucket":   "M4 6h16l-2 14H6z M4 6c0-1.5 3.6-2.5 8-2.5s8 1 8 2.5",
-    "server":   "M4 4h16v7H4z M4 13h16v7H4z M8 7.5h.01 M8 16.5h.01 M12 7.5h4 M12 16.5h4",
-    "laptop":   "M5 5h14v10H5z M3 15h18l1.5 4h-21z",
-    "tag":      "M3 3h8l10 10-8 8L3 11z M7.5 7.5h.01",
-    "shield":   "M12 3 20 6v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z M8.5 12l2.5 2.5 4.5-4.5",
-    "users":    "M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 1 0 0 7z M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6 M16 4.5a3.5 3.5 0 0 1 0 6.5 M18 14c2.2.6 3.5 2.8 3.5 6",
-    "chat":     "M4 5h16v11H9l-5 4z M8 9.5h8 M8 12.5h5",
+    "library":  "M3 7h13v11H3z M6 4h13v11 M7 14l3-3 2.5 2.5L15 11l2 2.5",
     "chip":     "M8 8h8v8H8z M5 5h14v14H5z M10 2v3 M14 2v3 M10 19v3 M14 19v3 M2 10h3 M2 14h3 M19 10h3 M19 14h3",
-    "bell":     "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z M10 20.5a2 2 0 0 0 4 0",
-    "mail":     "M3 6h18v12H3z M3 6l9 7 9-7",
-    "user_plus": "M10 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8z M3 21c0-4 3-7 7-7s7 3 7 7 M19 8v6 M16 11h6",
-    "user":     "M12 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8z M5 21c0-4 3-7 7-7s7 3 7 7",
-    "user_x":   "M10 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8z M3 21c0-4 3-7 7-7s7 3 7 7 M16.5 8.5l5 5 M21.5 8.5l-5 5",
-    "user_check": "M10 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8z M3 21c0-4 3-7 7-7s7 3 7 7 M16 11l2 2 4-4",
-    "archive":  "M3 4h18v4H3z M5 8v12h14V8 M10 12h4",
+    "frame":    "M3 5h18v12H3z M9 20h6 M12 17v3 M6 13l3.5-4 2.5 3 2-2.5L18 13",
+    "house":    "M4 11 12 4l8 7 M6 10v9h12v-9 M10 19v-5h4v5",
+    "moon":     "M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z",
+    "bolt":     "M13 2 4 14h7l-1 8 9-12h-7z",
+    "server":   "M4 4h16v6H4z M4 14h16v6H4z M7 7h.01 M7 17h.01 M11 7h6 M11 17h6",
+    "database": "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6 M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3",
+    "cloud":    "M7 18h10a4 4 0 0 0 .5-7.97A6 6 0 0 0 6.1 9.5 4.3 4.3 0 0 0 7 18z",
+    "laptop":   "M5 5h14v10H5z M2 19h20 M9 19l1-2h4l1 2",
+    "phone":    "M8 2h8a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z M11 18h2",
+    "mail":     "M3 6h18v12H3z M3 7l9 6 9-6",
+    "clock":    "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M12 7v5l3 2",
+    "shield":   "M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z M9 12l2 2 4-4",
+    "box":      "M12 3 3 7.5v9L12 21l9-4.5v-9z M3 7.5 12 12l9-4.5 M12 12v9",
+    "user":     "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21c0-4 3.6-6 8-6s8 2 8 6",
+    "users":    "M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z M2 20c0-3.5 3-5.5 7-5.5s7 2 7 5.5 M16 4.5a3.5 3.5 0 0 1 0 6.5 M18 14.8c2.4.6 4 2.3 4 5.2",
+    "key":      "M14 10a4 4 0 1 0-3.2 3.9L13 16h2v2h2v2h3v-3l-5.1-5.1c.1-.3.1-.6.1-.9z M8 9h.01",
+    "camera":   "M3 8h4l2-3h6l2 3h4v11H3z M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+    "chart":    "M4 20V4 M4 20h16 M8 16v-5 M12 16V8 M16 16v-3",
+    "api":      "M8 7 3 12l5 5 M16 7l5 5-5 5 M14 4l-4 16",
+    "bell":     "M6 16V11a6 6 0 1 1 12 0v5l2 2H4z M10 21h4",
+    "chat":     "M4 5h16v11H9l-5 4z",
+    "gear":     "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 1.7-1l2.4 1 2-3.4z",
+    "code":     "M4 4h16v16H4z M9 9l-3 3 3 3 M15 9l3 3-3 3",
+    "tv":       "M3 5h18v12H3z M8 21h8",
+    "play":     "M6 4l14 8-14 8z",
+    "file":     "M6 2h8l5 5v15H6z M14 2v5h5 M9 13h6 M9 17h6",
+    "lock":     "M6 11h12v10H6z M8 11V7a4 4 0 0 1 8 0v4",
+    "globe":    "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M3 12h18 M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9 M12 3c-2.5 2.7-3.8 5.7-3.8 9s1.3 6.3 3.8 9",
+    "wifi":     "M2 9a15 15 0 0 1 20 0 M5.5 12.5a10 10 0 0 1 13 0 M9 16a5 5 0 0 1 6 0 M12 19.5h.01",
+    "disk":     "M3 6h18v12H3z M7 14h.01 M11 14h6",
+    "terminal": "M3 5h18v14H3z M7 10l3 2.5L7 15 M12.5 15h4.5",
+    "calendar": "M4 6h16v15H4z M4 10h16 M8 3v5 M16 3v5 M8 14h2 M14 14h2 M8 17.5h2",
     "refresh":  "M20 12a8 8 0 1 1-2.3-5.7 M20 4v4.5h-4.5",
+    "search":   "M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 1 0 0-13z M15.5 15.5 20 20",
+    "filter":   "M4 5h16l-6 7.5V19l-4 1.5v-8z",
+    "send":     "M21 3 3 10.5l7.5 3 3 7.5z M10.5 13.5 21 3",
     "alert":    "M12 3 22 20H2z M12 10v4 M12 17h.01",
+    "archive":  "M3 4h18v4H3z M5 8v12h14V8 M10 12h4",
+    "tag":      "M3 3h8l10 10-8 8L3 11z M7.5 7.5h.01",
+    "user_plus":  "M10 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8z M3 21c0-4 3-7 7-7s7 3 7 7 M19 8v6 M16 11h6",
+    "user_x":     "M10 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8z M3 21c0-4 3-7 7-7s7 3 7 7 M16.5 8.5l5 5 M21.5 8.5l-5 5",
+    "user_check": "M10 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8z M3 21c0-4 3-7 7-7s7 3 7 7 M16 11l2 2 4-4",
+    "bucket":   "M4 6h16l-2 14H6z M4 6c0-1.5 3.6-2.5 8-2.5s8 1 8 2.5",
+    "download": "M12 3v12 M7 10l5 5 5-5 M4 20h16",
+    "wrench":   "M14.7 6.3a4 4 0 0 1 5-1.5l-2.6 2.6.5 2 2 .5 2.6-2.6a4 4 0 0 1-5.4 5.1L10 19.2",
+    "bug":      "M9 7a3 3 0 0 1 6 0 M7 9h10v5a5 5 0 0 1-10 0z M12 9v10 M3 12h4 M17 12h4",
+    "pulse":    "M3 12h4l2.5-6 5 12 2.5-6h4",
+    "sliders":  "M4 6h9 M17 6h3 M4 12h3 M11 12h9 M4 18h11 M19 18h1 M15 4v4 M9 10v4 M17 16v4",
+    "heart":    "M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.4-7.5 10-7.5 10z",
+    "sparkle":  "M11 3l1.9 5.6L18.5 10.5l-5.6 1.9L11 18l-1.9-5.6L3.5 10.5l5.6-1.9z",
+    "rewind":   "M11 6 4 12l7 6z M20 6l-7 6 7 6z",
 }
 
 
@@ -154,7 +181,7 @@ class Canvas:
         path = " ".join(f"{x},{y}" for x, y in pts)
         out = [f'<polyline points="{path}" fill="none" stroke="{c["line"]}" '
                f'stroke-width="1.5"{d} marker-end="url(#a)"'
-               + (' marker-start="url(#a)"' if both else "") + "/>"]
+               + (' marker-start="url(#b)"' if both else "") + "/>"]
         if label:
             (x1, y1), (x2, y2) = pts[0], pts[-1]
             lx = x1 + (x2 - x1) * label_at
@@ -186,85 +213,98 @@ class Canvas:
             f'<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" '
             f'markerHeight="6" orient="auto-start-reverse">'
             f'<path d="M0 0 10 5 0 10z" fill="{c["line"]}"/></marker>'
+            f'<marker id="b" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" '
+            f'markerHeight="6" orient="auto">'
+            f'<path d="M10 0 0 5 10 10z" fill="{c["line"]}"/></marker>'
             f'</defs>' + "".join(self.parts) + "</svg>"
         )
 
-
 # ── the diagrams ──────────────────────────────────────────────────────────
+# Jamf-SnipeIT Suite: one Fargate task definition, fired by five EventBridge
+# rules, reconciling Jamf Pro and Snipe-IT against Azure AD and HiBob.
+
+W, H = 268, 108
+XS, TOP = [24, 456, 888], 56
+PITCH = H + 24
+
 
 def architecture(scheme):
     """What runs where. One task definition, fired five ways."""
-    k = Canvas(1180, 678, scheme,
-               "Five EventBridge rules run one Fargate task, which pulls its image from ECR, "
-               "reads secrets and the run lock from SSM, logs to CloudWatch and caches AI "
-               "decisions in S3. The task reads and writes Jamf Pro, Snipe-IT and Azure AD, "
-               "only reads HiBob, reports to Slack and asks the Anthropic API about ambiguous "
-               "matches. Failed or unlaunched runs alert through SNS.")
+    rows = 5
+    tx, ty = XS[1], TOP
+    th = rows * H + (rows - 1) * (PITCH - H)
+    ay = ty + th + 72                       # Anthropic, under the task
+    k = Canvas(1180, ay + H + 26 + 52, scheme,
+               "Five EventBridge rules run one ECS Fargate task that pulls its image from ECR, "
+               "keeps secrets and the run lock in SSM, caches AI decisions in S3, logs to "
+               "CloudWatch with SNS failure alerts, reads and writes Jamf Pro and Snipe-IT, "
+               "only reads Azure AD and HiBob, reports to Slack and asks the Anthropic API "
+               "about ambiguous matches.")
     c = k.c
-    ax, aw, ah, gap = 56, 220, 64, 12
-    tx, tw, ty, th = 356, 300, 72, 368
-    side = [
-        ("EventBridge", "5 cron rules run the task", "clock", "in"),
-        ("ECR", "image :latest and :base", "package", "in"),
-        ("SSM Parameter Store", "secrets and the run lock", "key", "both"),
-        ("CloudWatch Logs", "container output", "terminal", "out"),
-        ("S3 AI cache", "AI resolver decisions", "bucket", "both"),
+    left = [
+        ("EventBridge", ["5 cron rules, one task def,", "each passes its RUN_MODE"],
+         "clock", "RunTask + RUN_MODE", "in"),
+        ("ECR", ["image :latest, patched", "weekly from the :base tag"],
+         "box", "pull :latest", "in"),
+        ("SSM Parameter Store", ["API secrets as SecureString", "and the RunMutex lock"],
+         "key", "secrets, RunMutex", "both"),
+        ("S3 AI cache", ["ai-resolver-cache.json,", "survives Fargate restarts"],
+         "bucket", "AI decisions", "both"),
+        ("CloudWatch + SNS", ["container logs; failed or", "unlaunched runs alert"],
+         "bell", "logs, exit status", "out"),
     ]
-    k.add(k.group(24, 36, 664, 572, "AWS, EU-WEST-1"))
-    for i, (title, sub, icon, way) in enumerate(side):
-        y = ty + i * (ah + gap)
-        mid = y + ah / 2
-        k.add(k.box(ax, y, aw, ah, title, [sub], icon=icon))
-        if way == "out":
-            k.add(k.edge([(tx - 8, mid), (ax + aw + 8, mid)]))
-        else:
-            k.add(k.edge([(ax + aw + 8, mid), (tx - 8, mid)], both=way == "both"))
+    right = [
+        ("Jamf Pro", ["computers, local accounts,", "Snipe-IT user info pushed"],
+         "laptop", "devices, accounts", "both"),
+        ("Snipe-IT", ["users, assets, accessories:", "the register kept true"],
+         "tag", "users, assets", "both"),
+        ("Azure AD / Entra ID", ["read via Microsoft Graph:", "users, groups, leave dates"],
+         "shield", "users, groups", "in"),
+        ("HiBob", ["HR source of truth,", "read-only service user"],
+         "users", "people, equipment", "in"),
+        ("Slack", ["run summaries, errors,", "ambiguous re-hire queue"],
+         "chat", "summaries, queue", "out"),
+    ]
+    for i, (title, subs, icon, label, way) in enumerate(left):
+        y = TOP + i * PITCH
+        mid = y + H / 2
+        a, b = (XS[0] + W + 8, mid), (tx - 8, mid)
+        k.add(k.box(XS[0], y, W, H, title, subs, icon=icon),
+              k.edge([b, a] if way == "out" else [a, b], label=label, both=way == "both"))
+    for i, (title, subs, icon, label, way) in enumerate(right):
+        y = TOP + i * PITCH
+        mid = y + H / 2
+        a, b = (tx + W + 8, mid), (XS[2] - 8, mid)
+        k.add(k.box(XS[2], y, W, H, title, subs, icon=icon),
+              k.edge([b, a] if way == "in" else [a, b], label=label, both=way == "both"))
 
-    # The task: the one thing that runs, with the module set it can run.
-    k.add(k.box(tx, ty, tw, th, "ECS Fargate task",
-                ["linux/amd64, read-only root fs", "RUN_MODE picks the module set",
-                 "every job holds the RunMutex"], icon="server", tone="accent"))
-    y = ty + 122
-    for head, rows in (("LIFECYCLE", ["azure-starters, user-enrichment,", "rehire-detection, leavers"]),
-                       ("SYNC", ["user-match, correction,", "snipe-to-jamf, model-sync,",
-                                 "peripherals-sync"]),
-                       ("MAINTENANCE", ["cleanup, health-check, ai-audit,",
-                                        "reconciliation, monthly-digest,",
-                                        "pending-reconciliation,", "jamf-location-cleanup"])):
+    # The task: the one thing that runs, with the module set RUN_MODE picks from.
+    k.add(k.box(tx, ty, W, th, "ECS Fargate task",
+                ["linux/amd64, read-only root fs,", "every job holds the RunMutex"],
+                icon="server", tone="accent"))
+    y = ty + 118
+    for head, lines in (
+            ("LIFECYCLE", ["rehire-detection, leavers,", "azure-starters,", "user-enrichment"]),
+            ("SYNC", ["user-match, correction,", "snipe-to-jamf, model-sync,",
+                      "peripherals-sync"]),
+            ("MAINTENANCE", ["cleanup, health-check,", "ai-audit, reconciliation,",
+                             "monthly-digest,", "pending-reconciliation,",
+                             "jamf-location-cleanup"]),
+            ("ON DEMAND", ["wakeup, username-standardize"])):
         k.add(k.text(tx + 16, y, head, size=11, colour=c["on_accent"], weight="600",
                      opacity="0.85"))
-        for j, row in enumerate(rows):
-            k.add(k.text(tx + 16, y + 20 + j * 18, row, size=11.5, colour=c["on_accent"],
-                         font=MONO))
-        y += 20 + len(rows) * 18 + 10
+        for j, line in enumerate(lines):
+            k.add(k.text(tx + 16, y + 21 + j * 19, line, size=11.5,
+                         colour=c["on_accent"], font=MONO))
+        y += 21 + len(lines) * 19 + 16
 
-    # Systems of record. HiBob is the only one the task never writes to.
-    ex, ew, eh = 872, 284, 48
-    step = (th - eh) / 5
-    systems = [
-        ("Jamf Pro", "laptop", "devices, local accounts", False),
-        ("Snipe-IT", "tag", "users, assets, accessories", False),
-        ("Azure AD / Entra ID", "shield", "groups, account status", False),
-        ("HiBob, read-only", "users", "employees, equipment", True),
-        ("Slack", "chat", "summaries, human queue", False),
-        ("Anthropic API", "chip", "ambiguous matches, audit", False),
-    ]
-    for i, (title, icon, label, ro) in enumerate(systems):
-        y = ty + i * step
-        mid = y + eh / 2
-        k.add(k.box(ex, y, ew, eh, title, icon=icon),
-              k.edge([(tx + tw + 8, mid), (ex - 8, mid)], label=label, dash=ro))
-
-    # Failure path: a task that stops badly, or a rule that could not start one.
-    fy = ty + th + 48
-    k.add(k.box(tx, fy, tw, 88, "Failure alerts",
-                ["task stopped non-zero, or a", "schedule that failed to launch"], icon="bell"),
-          k.edge([(tx + tw / 2, ty + th + 8), (tx + tw / 2, fy - 8)], dash=True),
-          k.box(ax, fy, aw, 88, "SNS alerts topic", ["plus an optional", "email subscription"],
-                icon="mail"),
-          k.edge([(tx - 8, fy + 44), (ax + aw + 8, fy + 44)]),
-          k.footer("Five schedules, one task definition: the RUN_MODE each rule passes "
-                   "decides which modules run. HiBob is only ever read."))
+    k.add(k.box(tx, ay, W, H, "Anthropic API",
+                ["resolves ambiguous matches,", "runs the weekly ai-audit"], icon="sparkle"),
+          k.edge([(tx + W / 2, ty + th + 8), (tx + W / 2, ay - 8)]),
+          k.text(tx + W / 2 + 14, (ty + th + ay) / 2 + 4, "ambiguous matches",
+                 size=11.5, font=MONO, colour=c["chip"]),
+          k.footer("Of the systems of record, only Jamf Pro and Snipe-IT are written to; Azure AD and "
+                   "HiBob are read-only. Each rule's RUN_MODE picks the modules."))
     return k.render()
 
 
@@ -325,12 +365,26 @@ DIAGRAMS = {
 
 
 def main() -> None:
+    import sys
+    check = "--check" in sys.argv[1:]
     out = ROOT / "docs" / "assets"
     out.mkdir(parents=True, exist_ok=True)
+    stale = []
     for name, fn in DIAGRAMS.items():
         for scheme in SCHEMES:
             path = out / f"{name}-{scheme}.svg"
-            path.write_text(fn(scheme), encoding="utf-8")
+            svg = fn(scheme)
+            if check:
+                if not path.exists() or path.read_text(encoding="utf-8") != svg:
+                    stale.append(str(path.relative_to(ROOT)))
+            else:
+                path.write_text(svg, encoding="utf-8")
+    if check:
+        if stale:
+            print("stale diagrams (run python3 tools/gen_diagram.py):\n  " + "\n  ".join(stale))
+            sys.exit(1)
+        print(f"{len(DIAGRAMS) * len(SCHEMES)} diagram files up to date")
+        return
     print(f"{len(DIAGRAMS)} diagrams x {len(SCHEMES)} schemes -> docs/assets/")
 
 

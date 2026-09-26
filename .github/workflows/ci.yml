@@ -30,6 +30,9 @@ jobs:
       - name: Check generated module inventory is current
         run: python tools/gen_modules_doc.py --check
 
+      - name: Diagrams up to date
+        run: python3 tools/gen_diagram.py --check
+
   terraform:
     runs-on: ubuntu-latest
     steps:
